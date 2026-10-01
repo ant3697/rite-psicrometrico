@@ -1,0 +1,216 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    /* Fonts from Custom Design System */
+    --font-primary: 'Roboto Condensed', sans-serif;
+    --font-secondary: 'Inter', sans-serif;
+    --font-mono: 'Fira Code', monospace;
+
+    /* Sizes */
+    --text-tiny: 9px;
+    --text-small: 11px;
+    --text-body: 13px;
+    --text-subtitle: 14px;
+    --text-title: 18px;
+    --text-display: 22px;
+
+    /* Weights */
+    --font-regular: 400;
+    --font-semibold: 600;
+    --font-bold: 800;
+
+    /* Colors Dark (Default App Mode) */
+    --color-bg-app: #0a0a0c;
+    --color-bg-surface: #1a1a1c;
+    --color-bg-glass: rgba(15, 23, 42, 0.85);
+    --color-bg-alt: rgba(0, 0, 0, 0.3);
+    --color-bg-hover: rgba(255, 255, 255, 0.1);
+
+    --color-border-subtle: rgba(255, 255, 255, 0.05);
+    --color-border-default: rgba(255, 255, 255, 0.1);
+    --color-border-strong: rgba(255, 255, 255, 0.2);
+
+    --color-text-primary: #ffffff;
+    --color-text-secondary: #f8fafc;
+    --color-text-muted: #cbd5e1;
+
+    --color-accent-base: #fbbf24;
+    --color-accent-hover: #f59e0b;
+    --color-accent-ghost: rgba(251, 191, 36, 0.15);
+    --color-accent-text: #000000;
+
+    /* Status Colors */
+    --color-status-success: #65a30d;
+    --color-status-success-dark: #a3e635;
+    --color-status-warning: #d97706;
+    --color-status-warning-dark: #fbbf24;
+    --color-status-danger: #ef4444;
+    --color-status-danger-dark: #fca5a5;
+    --color-status-info: #3b82f6;
+    --color-status-info-dark: #93c5fd;
+    --color-status-highlight: #10b981;
+    --color-status-highlight-dark: #6ee7b7;
+
+    /* Shape */
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --radius-lg: 8px;
+    --radius-xl: 12px;
+    --radius-pill: 20px;
+    --radius-circle: 50%;
+
+    /* Effects */
+    --shadow-soft: 0 4px 6px rgba(0, 0, 0, 0.3);
+    --shadow-medium: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+    --shadow-glow: 0 0 10px rgba(251, 191, 36, 0.25);
+    --blur-glass: blur(12px);
+    --transition-fast: all 0.1s ease;
+    --transition-default: all 0.2s ease;
+  }
+
+  body {
+    font-family: var(--font-primary);
+    background-color: var(--color-bg-app);
+    color: var(--color-text-primary);
+    letter-spacing: 0px;
+  }
+
+  .font-primary {
+    font-family: var(--font-primary);
+  }
+
+  .font-secondary {
+    font-family: var(--font-secondary);
+  }
+
+  .font-mono {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .font-tech {
+    font-family: var(--font-primary);
+    letter-spacing: 0.5px;
+  }
+}
+
+/* Custom Component Classes from Design System Token Specification */
+.panel-glass {
+  background: var(--color-bg-glass);
+  backdrop-filter: var(--blur-glass);
+  -webkit-backdrop-filter: var(--blur-glass);
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--color-border-default);
+  box-shadow: var(--shadow-medium);
+}
+
+.btn-primary {
+  background: var(--color-accent-base);
+  color: var(--color-accent-text);
+  border-radius: var(--radius-md);
+  font-weight: 800;
+  padding: 8px 14px;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  box-shadow: var(--shadow-glow);
+  transition: var(--transition-default);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+.btn-primary:hover {
+  background: var(--color-accent-hover);
+  transform: translateY(-1px);
+  border-color: rgba(0, 0, 0, 0.4);
+}
+.btn-primary:active {
+  transform: scale(0.97);
+}
+
+.btn-secondary {
+  background: var(--color-bg-alt);
+  color: var(--color-text-primary);
+  border-radius: var(--radius-md);
+  font-weight: 600;
+  padding: 7px 12px;
+  border: 1px solid var(--color-border-strong);
+  transition: var(--transition-default);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+.btn-secondary:hover {
+  background: var(--color-bg-hover);
+  border-color: var(--color-accent-base);
+  color: #ffffff;
+}
+
+.input-pro {
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border-default);
+  color: var(--color-text-primary);
+  border-radius: var(--radius-md);
+  font-size: var(--text-body);
+  padding: 8px 12px;
+  transition: var(--transition-fast);
+}
+.input-pro:focus {
+  outline: none;
+  border-color: var(--color-accent-base);
+  box-shadow: 0 0 0 3px var(--color-accent-ghost);
+}
+
+.tabs-container {
+  background: var(--color-bg-alt);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border-subtle);
+  padding: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.tab-item {
+  padding: 6px 12px;
+  font-weight: 600;
+  font-size: var(--text-subtitle);
+  color: var(--color-text-muted);
+  border-radius: var(--radius-md);
+  transition: var(--transition-default);
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+}
+.tab-item:hover {
+  color: var(--color-text-primary);
+}
+.tab-item.active {
+  background: var(--color-accent-base);
+  color: var(--color-accent-text);
+  font-weight: 800;
+  box-shadow: var(--shadow-soft);
+}
+
+/* Dense engineering custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.6);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(51, 65, 85, 0.8);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-accent-hover);
+}

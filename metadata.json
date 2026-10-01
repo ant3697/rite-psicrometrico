@@ -1,0 +1,6 @@
+{
+  "name": "PsychroStudio Pro - Diagrama Psicrométrico & Mollier HVAC",
+  "description": "Herramienta profesional de diagramas psicrométricos y Mollier interactivos para cálculo, simulación y análisis de procesos de climatización y psicrometría HVAC.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
