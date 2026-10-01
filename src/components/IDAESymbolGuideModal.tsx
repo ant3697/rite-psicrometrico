@@ -216,6 +216,9 @@ export const IDAESymbolGuideModal: React.FC<IDAESymbolGuideModalProps> = ({
                   <span className="text-xs font-mono px-2 py-0.5 rounded-md bg-cyan-950/80 text-cyan-300 border border-cyan-800/80">
                     {activeDef.normativeReference}
                   </span>
+                  <span className="text-xs font-mono px-2 py-0.5 rounded-md bg-amber-950/80 text-amber-300 border border-amber-800/80">
+                    Cota IDAE: {activeDef.dimensionDefault}
+                  </span>
                   <span className="text-xs font-mono px-2 py-0.5 rounded-md bg-slate-800 text-slate-300">
                     {activeDef.guideSection}
                   </span>

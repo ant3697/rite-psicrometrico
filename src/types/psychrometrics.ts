@@ -97,6 +97,7 @@ export interface ChartLayerVisibility {
 export type AHUModuleType =
   | 'intake_damper'
   | 'prefilter'
+  | 'prefilter_flat'
   | 'mixing_box'
   | 'heat_recovery'
   | 'rotary_wheel'

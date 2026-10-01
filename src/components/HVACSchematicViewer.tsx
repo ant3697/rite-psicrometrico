@@ -111,7 +111,7 @@ export const MODULE_CATALOG: Array<{
   },
   {
     type: 'prefilter',
-    title: 'Prefiltro G4 / ISO Coarse 65%',
+    title: 'Prefiltro G4 / ISO Coarse 65% (0,40 m)',
     shortName: 'Prefiltro G4',
     category: 'Filtrado',
     color: '#F43F5E',
@@ -119,6 +119,18 @@ export const MODULE_CATALOG: Array<{
     bgBadge: 'bg-rose-950/80 text-rose-300 border-rose-800/80',
     defaultDropPa: 60,
     description: 'Retiene partículas gruesas de polvo, polen e insectos, protegiendo baterías y componentes internos.',
+    defaultParams: { filterClass: 'G4' },
+  },
+  {
+    type: 'prefilter_flat',
+    title: 'Prefiltro Plano G4/G5 (0,15 m)',
+    shortName: 'Prefiltro Plano',
+    category: 'Filtrado',
+    color: '#F43F5E',
+    borderColor: '#E11D48',
+    bgBadge: 'bg-rose-950/80 text-rose-300 border-rose-800/80',
+    defaultDropPa: 35,
+    description: 'Filtro plano compacto de reducida profundidad (0,15 m según Pág. 18 IDAE), ideal para falso techo.',
     defaultParams: { filterClass: 'G4' },
   },
   {
@@ -335,6 +347,24 @@ const AHU_ARCHETYPES: Array<{
     moduleTypes: ['prefilter', 'cooling_coil', 'heating_coil', 'final_filter', 'fan'],
   },
   {
+    id: 'idae_pag17_standard',
+    name: 'UTA 1,7 m con Ventilador Correas (Guía IDAE Pág. 17)',
+    description: 'Composición de 1,7 m (Pág. 17 IDAE): Prefiltro F6 (0,4m) + Ventilador de correas (0,5m) + Plenum (0,4m) + Filtro F8 (0,4m).',
+    moduleTypes: ['prefilter', 'belt_fan', 'plenum', 'final_filter'],
+  },
+  {
+    id: 'idae_pag18_direct_130',
+    name: 'UTA 1,3 m Acoplamiento Directo (Guía IDAE Pág. 18 Superior)',
+    description: 'Composición reducida a 1,3 m (Pág. 18 IDAE): Prefiltro F6 (0,4m) + Filtro de bolsas F7 (0,4m) + Ventilador directo (0,5m).',
+    moduleTypes: ['prefilter', 'final_filter', 'fan'],
+  },
+  {
+    id: 'idae_pag18_flat_105',
+    name: 'UTA 1,05 m Compacta Falso Techo (Guía IDAE Pág. 18 Inferior)',
+    description: 'Composición ultracompacta para falso techo (1,05 m): Prefiltro plano G4 (0,15m) + Filtro F7 (0,4m) + Ventilador directo (0,5m).',
+    moduleTypes: ['prefilter_flat', 'final_filter', 'fan'],
+  },
+  {
     id: 'idae_fig3_double_deck_wheel',
     name: 'UTA Doble Piso + Rueda Entálpica (Guía IDAE Fig. 3, Pág. 18)',
     description: 'Unidad de dos pisos con recuperador rotativo de rueda entálpica, ventilador de impulsión, ventilador de retorno/extracción y compuertas de regulación.',
@@ -506,6 +536,9 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
   const [idaeTheme, setIdaeTheme] = useState<'idae_white' | 'dark_blueprint'>('idae_white');
   const isWhiteTheme = idaeTheme === 'idae_white';
 
+  // Longitudinal section view mode: 'elevation' (Alzado), 'plan' (Planta), 'dual' (Alzado + Planta - Págs 17/18)
+  const [cutViewMode, setCutViewMode] = useState<'elevation' | 'plan' | 'dual'>('elevation');
+
   // Viewport Transform State (Zoom, Pan, Center)
   const [transform, setTransform] = useState<ViewTransform>({
     zoom: 1.0,
@@ -610,6 +643,7 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
   const moduleWidths: Record<AHUModuleType, number> = {
     intake_damper: 95,
     prefilter: 85,
+    prefilter_flat: 55,
     mixing_box: 135,
     heat_recovery: 155,
     rotary_wheel: 145,
@@ -626,6 +660,84 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
     final_filter: 95,
     silencer: 125,
     exhaust_damper: 95,
+  };
+
+  // Dimensions in meters matching the official IDAE guide (Págs. 16, 17, 18, 71, 73, 81)
+  const moduleDimensionsMeters: Record<AHUModuleType, number> = {
+    intake_damper: 0.35,
+    prefilter: 0.40,
+    prefilter_flat: 0.15,
+    mixing_box: 0.45,
+    heat_recovery: 0.60,
+    rotary_wheel: 0.60,
+    cooling_coil: 0.40,
+    heating_coil: 0.40,
+    electric_heater: 0.35,
+    adiabatic_cooling: 0.45,
+    humidifier: 0.35,
+    droplet_eliminator: 0.20,
+    fan: 0.50,
+    belt_fan: 0.50,
+    return_fan: 0.50,
+    plenum: 0.40,
+    final_filter: 0.40,
+    silencer: 0.45,
+    exhaust_damper: 0.35,
+  };
+
+  // Total AHU length in meters
+  const totalLengthMeters = useMemo(() => {
+    return Number(
+      enabledModules
+        .reduce((sum, m) => sum + (moduleDimensionsMeters[m.type] || 0.40), 0)
+        .toFixed(2)
+    );
+  }, [enabledModules]);
+
+  // Canonical IDAE Module Header Titles (Figures 1, 2, 11, 16, Pages 73 & 81)
+  const getIdaeModuleTitle = (mod: AHUModuleItem): string => {
+    switch (mod.type) {
+      case 'prefilter':
+        return 'Prefiltro';
+      case 'prefilter_flat':
+        return 'Prefiltro';
+      case 'cooling_coil':
+        return 'Baterías (−)';
+      case 'heating_coil':
+        return 'Baterías (+)';
+      case 'electric_heater':
+        return 'Baterías (+ Eléc.)';
+      case 'belt_fan':
+        return 'Ventilador';
+      case 'fan':
+        return 'Ventilador';
+      case 'return_fan':
+        return 'Vent. Retorno';
+      case 'final_filter':
+        return 'Filtro';
+      case 'plenum':
+        return 'Plenum';
+      case 'heat_recovery':
+        return 'Recuperador';
+      case 'rotary_wheel':
+        return 'Rotor η';
+      case 'adiabatic_cooling':
+        return 'Enfriam. adiabático';
+      case 'droplet_eliminator':
+        return 'Sep. Gotas';
+      case 'mixing_box':
+        return 'Cám. Mezcla';
+      case 'intake_damper':
+        return 'Toma ODA';
+      case 'exhaust_damper':
+        return 'Expulsión EHA';
+      case 'silencer':
+        return 'Silenciador';
+      case 'humidifier':
+        return 'Humidificador';
+      default:
+        return mod.name.split(' ')[0];
+    }
   };
 
   // Calculate dynamic chassis width based on assembled modules
@@ -1296,6 +1408,46 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
               </span>
             </div>
 
+            {/* Projection Mode Switcher (Alzado / Planta / Dual IDAE Pág. 17-18) */}
+            {schematicMode === 'ahu_section' && (
+              <div className="flex items-center gap-1 bg-slate-950/90 backdrop-blur-md px-2 py-1.5 rounded-xl border border-slate-700/80 shadow-lg">
+                <span className="text-[10px] font-mono text-slate-400 uppercase mr-1 hidden sm:inline">Proyección:</span>
+                <button
+                  onClick={() => setCutViewMode('elevation')}
+                  className={`px-2 py-0.5 rounded-md text-xs font-semibold transition-colors ${
+                    cutViewMode === 'elevation'
+                      ? 'bg-amber-400 text-black font-bold shadow-sm'
+                      : 'text-slate-300 hover:text-white hover:bg-slate-800'
+                  }`}
+                  title="Corte longitudinal en alzado (Figuras 1 y 2 de la Guía IDAE)"
+                >
+                  Alzado
+                </button>
+                <button
+                  onClick={() => setCutViewMode('plan')}
+                  className={`px-2 py-0.5 rounded-md text-xs font-semibold transition-colors ${
+                    cutViewMode === 'plan'
+                      ? 'bg-amber-400 text-black font-bold shadow-sm'
+                      : 'text-slate-300 hover:text-white hover:bg-slate-800'
+                  }`}
+                  title="Vista en planta de la UTA (Páginas 17 y 18 de la Guía IDAE)"
+                >
+                  Planta
+                </button>
+                <button
+                  onClick={() => setCutViewMode('dual')}
+                  className={`px-2 py-0.5 rounded-md text-xs font-semibold transition-colors ${
+                    cutViewMode === 'dual'
+                      ? 'bg-amber-400 text-black font-bold shadow-sm'
+                      : 'text-slate-300 hover:text-white hover:bg-slate-800'
+                  }`}
+                  title="Vista simultánea Alzado + Planta (Páginas 17 y 18 de la Guía IDAE)"
+                >
+                  Dual (Alzado+Planta)
+                </button>
+              </div>
+            )}
+
             {/* Navigation HUD */}
             <div className="flex items-center gap-1 bg-slate-950/90 backdrop-blur-md px-2 py-1.5 rounded-xl border border-slate-700/80 shadow-lg">
               <button
@@ -1360,7 +1512,9 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
             onMouseUp={handleMouseUp}
             onMouseLeave={handleMouseUp}
             onDoubleClick={handleZoomAll}
-            className={`w-full relative overflow-hidden rounded-xl bg-slate-950/70 border transition-all flex items-center justify-center min-h-[480px] h-[520px] select-none ${
+            className={`w-full relative overflow-hidden rounded-xl bg-slate-950/70 border transition-all flex items-center justify-center select-none ${
+              cutViewMode === 'dual' ? 'min-h-[640px] h-[660px]' : 'min-h-[480px] h-[520px]'
+            } ${
               isOverAhu ? 'border-cyan-400 ring-2 ring-cyan-500/40 shadow-2xl shadow-cyan-500/20' : 'border-slate-800/80'
             } ${isDraggingCanvas ? 'cursor-grabbing' : 'cursor-grab'}`}
           >
@@ -1383,29 +1537,35 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
                 <div>
                   <h4 className="text-base font-bold text-white font-tech">Chasis de la UTA Vacío</h4>
                   <p className="text-xs text-slate-400 max-w-md mt-1">
-                    Arrastra módulos desde la paleta superior para comenzar a armar el tren de tratamiento o carga una plantilla predefinida.
+                    Arrastra módulos desde la paleta superior para comenzar a armar el tren de tratamiento o carga una plantilla predefinida de la Guía IDAE.
                   </p>
                 </div>
-                <div className="flex gap-2 pt-2">
+                <div className="flex flex-wrap gap-2 pt-2 justify-center">
                   <button
-                    onClick={() => handleLoadArchetype('standard_4pipe')}
-                    className="px-4 py-2 rounded-xl text-xs font-bold bg-cyan-500 text-slate-950 hover:bg-cyan-400 transition-colors shadow-lg shadow-cyan-500/20 flex items-center gap-1.5"
+                    onClick={() => handleLoadArchetype('idae_fig1_belt_fan')}
+                    className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-[#fbbf24] text-slate-950 hover:bg-[#f59e0b] transition-colors shadow-lg shadow-amber-500/20 flex items-center gap-1.5"
                   >
                     <Plus className="w-4 h-4" />
-                    <span>Cargar UTA 4 Tubos Estándar</span>
+                    <span>UTA Fig. 1 Correas (Pág. 16)</span>
                   </button>
                   <button
-                    onClick={() => handleLoadArchetype('heat_recovery_100oda')}
-                    className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-800 text-white hover:bg-slate-700 transition-colors border border-slate-700"
+                    onClick={() => handleLoadArchetype('idae_fig2_direct_fan')}
+                    className="px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 text-white hover:bg-slate-700 transition-colors border border-slate-700"
                   >
-                    <span>100% Aire Exterior</span>
+                    <span>UTA Fig. 2 Directa</span>
+                  </button>
+                  <button
+                    onClick={() => handleLoadArchetype('idae_pag18_flat_105')}
+                    className="px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-rose-950 text-rose-200 border border-rose-800 hover:bg-rose-900 transition-colors"
+                  >
+                    <span>UTA 1,05 m Compacta</span>
                   </button>
                 </div>
               </div>
             )}
 
             <svg
-              viewBox={`0 0 ${dynamicSvgViewBoxWidth} 440`}
+              viewBox={`0 0 ${dynamicSvgViewBoxWidth} ${cutViewMode === 'dual' ? 620 : 440}`}
               className="w-full h-full drop-shadow-2xl overflow-visible"
               preserveAspectRatio="xMidYMid meet"
             >
@@ -1423,7 +1583,11 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
 
               {/* Centered pan/zoom group */}
               <g
-                transform={`translate(${dynamicSvgViewBoxWidth / 2 + transform.panX}, ${220 + transform.panY}) scale(${transform.zoom}) translate(${-dynamicSvgViewBoxWidth / 2}, -220)`}
+                transform={`translate(${dynamicSvgViewBoxWidth / 2 + transform.panX}, ${
+                  (cutViewMode === 'dual' ? 310 : 220) + transform.panY
+                }) scale(${transform.zoom}) translate(${-dynamicSvgViewBoxWidth / 2}, ${
+                  cutViewMode === 'dual' ? -310 : -220
+                })`}
                 className="transition-transform duration-75"
               >
                 {/* Background Plate */}
@@ -1431,7 +1595,7 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
                   x="10"
                   y="10"
                   width={dynamicSvgViewBoxWidth - 20}
-                  height="420"
+                  height={cutViewMode === 'dual' ? 600 : 420}
                   rx="14"
                   fill="#090D16"
                   stroke={isOverAhu ? '#0284C7' : '#1E293B'}
@@ -1449,11 +1613,15 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
                   fontFamily="JetBrains Mono"
                   letterSpacing="1.5"
                 >
-                  CORTE LONGITUDINAL UTA · ENSAMBLAJE MODULAR & PARÁMETROS TERMODINÁMICOS
+                  {cutViewMode === 'elevation'
+                    ? 'CORTE LONGITUDINAL UTA EN ALZADO · SIMBOLOGÍA GUÍA TÉCNICA IDAE (FIGURAS 1 Y 2)'
+                    : cutViewMode === 'plan'
+                    ? 'CORTE LONGITUDINAL UTA EN PLANTA / VISTA SUPERIOR (PÁGINAS 17 Y 18 GUÍA IDAE)'
+                    : 'CORTE LONGITUDINAL UTA · VISTA DUAL ALZADO & PLANTA NORMALIZADA GUÍA IDAE'}
                 </text>
 
                 {/* Air Intake arrows: Aire Exterior (ODA) */}
-                <g transform="translate(35, 110)">
+                <g transform={`translate(35, ${cutViewMode === 'dual' ? 120 : 110})`}>
                   <text x="35" y="-15" textAnchor="middle" fill="#E2E8F0" fontSize="12" fontWeight="bold" fontFamily="Plus Jakarta Sans">
                     Aire exterior (ODA)
                   </text>
@@ -1475,22 +1643,36 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
                   ))}
                 </g>
 
-                {/* Dynamic AHU Chassis Enclosure */}
-                <g transform="translate(145, 55)">
+                {/* ---------------- TRAIN 1: ELEVATION (OR ACTIVE VIEW) ---------------- */}
+                <g transform={`translate(145, ${cutViewMode === 'dual' ? 55 : 55})`}>
+                  {cutViewMode === 'dual' && (
+                    <text
+                      x="10"
+                      y="-16"
+                      fill="#38BDF8"
+                      fontSize="10"
+                      fontWeight="bold"
+                      fontFamily="JetBrains Mono"
+                      letterSpacing="1"
+                    >
+                      ▲ ALZADO (CORTE LONGITUDINAL)
+                    </text>
+                  )}
+
                   {/* Chassis mounting legs with antivibration blocks */}
                   {[30, Math.floor(dynamicChassisWidth * 0.35), Math.floor(dynamicChassisWidth * 0.7), dynamicChassisWidth - 40].map((lx, i) => (
-                    <g key={`leg-${i}`} transform={`translate(${lx}, 220)`}>
-                      <rect x="0" y="0" width="22" height="28" fill="#1E293B" stroke="#475569" strokeWidth="1.5" rx="2" />
-                      <rect x="-6" y="24" width="34" height="8" fill="#0F172A" stroke="#334155" strokeWidth="1.5" rx="2" />
-                      <circle cx="11" cy="14" r="3" fill="#64748B" />
+                    <g key={`leg-${i}`} transform={`translate(${lx}, 200)`}>
+                      <rect x="0" y="0" width="22" height="26" fill="#1E293B" stroke="#475569" strokeWidth="1.5" rx="2" />
+                      <rect x="-6" y="22" width="34" height="7" fill="#0F172A" stroke="#334155" strokeWidth="1.5" rx="2" />
+                      <circle cx="11" cy="12" r="3" fill="#64748B" />
                     </g>
                   ))}
 
-                  {/* Outer double-wall insulated metal casing */}
-                  <rect x="0" y="0" width={dynamicChassisWidth} height="220" fill="#0B132B" stroke="#334155" strokeWidth="4" rx="6" />
-                  <rect x="4" y="4" width={dynamicChassisWidth - 8} height="212" fill="#070B14" stroke="#1E293B" strokeWidth="2" />
+                  {/* Outer double-wall insulated metal casing (sandwich panel) */}
+                  <rect x="0" y="0" width={dynamicChassisWidth} height="200" fill="#0B132B" stroke="#334155" strokeWidth="4" rx="6" />
+                  <rect x="4" y="4" width={dynamicChassisWidth - 8} height="192" fill="#070B14" stroke="#1E293B" strokeWidth="2" />
 
-                  {/* Render Insertion Drop Slots (visible when dragging) */}
+                  {/* Insertion drop guides */}
                   {isOverAhu && (
                     <g className="insertion-guides">
                       {(() => {
@@ -1509,7 +1691,7 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
                                 x="0"
                                 y="0"
                                 width="10"
-                                height="200"
+                                height="180"
                                 rx="2"
                                 fill={isHovered ? '#38BDF8' : '#0284C7'}
                                 opacity={isHovered ? 0.9 : 0.4}
@@ -1517,7 +1699,7 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
                                 strokeDasharray="4,3"
                               />
                               {isHovered && (
-                                <g transform="translate(5, 100)">
+                                <g transform="translate(5, 90)">
                                   <circle cx="0" cy="0" r="14" fill="#0284C7" stroke="#38BDF8" strokeWidth="2" />
                                   <text x="0" y="4" textAnchor="middle" fill="#FFFFFF" fontSize="12" fontWeight="bold">
                                     +
@@ -1531,7 +1713,7 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
                     </g>
                   )}
 
-                  {/* Render Each Modular Section Dynamically */}
+                  {/* Modules loop */}
                   {(() => {
                     let currentOffset = 10;
                     return enabledModules.map((mod, index) => {
@@ -1547,12 +1729,12 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
                           className="cursor-pointer group"
                           onClick={() => setEditingModuleId(mod.id)}
                         >
-                          {/* Module casing with active glow and theme styling */}
+                          {/* Module casing */}
                           <rect
                             x="0"
                             y="0"
                             width={modWidth}
-                            height="200"
+                            height="180"
                             rx="4"
                             fill={
                               isModActive
@@ -1574,9 +1756,8 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
                             filter={isModActive && !isWhiteTheme ? 'url(#glowDrop)' : undefined}
                           />
 
-                          {/* Reordering and Quick Action Overlay Buttons inside SVG on Hover */}
+                          {/* Quick reorder buttons */}
                           <g transform="translate(4, 6)" className="opacity-60 group-hover:opacity-100 transition-opacity">
-                            {/* Reorder Left */}
                             {index > 0 && (
                               <g
                                 transform="translate(0, 0)"
@@ -1590,7 +1771,6 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
                                 <text x="7" y="10" textAnchor="middle" fill={isWhiteTheme ? '#0F172A' : '#E2E8F0'} fontSize="8" fontWeight="bold">◀</text>
                               </g>
                             )}
-                            {/* Reorder Right */}
                             {index < enabledModules.length - 1 && (
                               <g
                                 transform="translate(18, 0)"
@@ -1606,7 +1786,7 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
                             )}
                           </g>
 
-                          {/* Delete Button top-right */}
+                          {/* Delete button */}
                           <g
                             transform={`translate(${modWidth - 18}, 6)`}
                             className="opacity-70 group-hover:opacity-100 cursor-pointer"
@@ -1619,44 +1799,337 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
                             <text x="7" y="10" textAnchor="middle" fill="#FFFFFF" fontSize="9" fontWeight="bold">✕</text>
                           </g>
 
-                          {/* Standardized IDAE / UNE-EN 12792 Section Symbol */}
+                          {/* Official IDAE Section Symbol */}
                           <IDAESectionSymbol
                             mod={mod}
                             modWidth={modWidth}
                             isFlowActive={isFlowActive}
                             isWhiteTheme={isWhiteTheme}
+                            viewMode={cutViewMode === 'plan' ? 'plan' : 'elevation'}
                           />
 
-                          {/* Module Title & Parameters Labels */}
+                          {/* Authentic IDAE Title on top of module */}
                           <text
                             x={modWidth / 2}
-                            y="-18"
+                            y="-14"
                             textAnchor="middle"
                             fill={isWhiteTheme ? '#0F172A' : '#E2E8F0'}
-                            fontSize="12"
+                            fontSize="11"
                             fontWeight="bold"
                             fontFamily="Plus Jakarta Sans"
                           >
-                            {mod.name.split(' ')[0]}
+                            {getIdaeModuleTitle(mod)}
                           </text>
+
+                          {/* Technical parameter subscript below module */}
                           <text
                             x={modWidth / 2}
-                            y="214"
+                            y="196"
                             textAnchor="middle"
                             fill={isWhiteTheme ? '#475569' : '#94A3B8'}
-                            fontSize="10"
+                            fontSize="9"
                             fontFamily="JetBrains Mono"
                           >
-                            {mod.params.filterClass || (mod.type === 'cooling_coil' ? `${mod.params.exitTdb}°C` : mod.type === 'heating_coil' ? `${mod.params.heatingTdb}°C` : `${mod.pressureDropPa} Pa`)}
+                            {mod.params.filterClass ||
+                              (mod.type === 'cooling_coil'
+                                ? `${mod.params.exitTdb}°C`
+                                : mod.type === 'heating_coil'
+                                ? `${mod.params.heatingTdb}°C`
+                                : `${mod.pressureDropPa} Pa`)}
                           </text>
                         </g>
                       );
                     });
                   })()}
+
+                  {/* Single view technical dimension chain (Líneas de cotas IDAE Pág. 17-18) */}
+                  {cutViewMode !== 'dual' && (
+                    <>
+                      {/* Individual module dimensions in magenta (#E11D48) */}
+                      <g transform="translate(0, 218)">
+                        {(() => {
+                          let currentX = 10;
+                          return enabledModules.map((mod, idx) => {
+                            const w = moduleWidths[mod.type] || 100;
+                            const xStart = currentX;
+                            const xEnd = currentX + w;
+                            const xMid = currentX + w / 2;
+                            const dimMeters = (moduleDimensionsMeters[mod.type] || 0.4).toFixed(2).replace('.', ',');
+                            currentX += w + 10;
+
+                            return (
+                              <g key={`dim-mod-${mod.id}-${idx}`}>
+                                <line x1={xStart} y1="-10" x2={xStart} y2="10" stroke="#E11D48" strokeWidth="1.2" />
+                                <line x1={xEnd} y1="-10" x2={xEnd} y2="10" stroke="#E11D48" strokeWidth="1.2" />
+                                <line x1={xStart} y1="0" x2={xEnd} y2="0" stroke="#E11D48" strokeWidth="1.2" />
+                                <polygon points={`${xStart},0 ${xStart + 5},-3 ${xStart + 5},3`} fill="#E11D48" />
+                                <polygon points={`${xEnd},0 ${xEnd - 5},-3 ${xEnd - 5},3`} fill="#E11D48" />
+                                <rect
+                                  x={xMid - 16}
+                                  y="-7"
+                                  width="32"
+                                  height="14"
+                                  fill={isWhiteTheme ? '#FFFFFF' : '#070B14'}
+                                  rx="2"
+                                />
+                                <text
+                                  x={xMid}
+                                  y="3"
+                                  textAnchor="middle"
+                                  fill="#E11D48"
+                                  fontSize="9.5"
+                                  fontWeight="bold"
+                                  fontFamily="JetBrains Mono"
+                                >
+                                  {dimMeters}
+                                </text>
+                              </g>
+                            );
+                          });
+                        })()}
+
+                        {/* Overall Total Length Dimension */}
+                        <g transform="translate(0, 24)">
+                          <line x1="10" y1="-8" x2="10" y2="8" stroke={isWhiteTheme ? '#0F172A' : '#E2E8F0'} strokeWidth="1.5" />
+                          <line
+                            x1={dynamicChassisWidth - 10}
+                            y1="-8"
+                            x2={dynamicChassisWidth - 10}
+                            y2="8"
+                            stroke={isWhiteTheme ? '#0F172A' : '#E2E8F0'}
+                            strokeWidth="1.5"
+                          />
+                          <line
+                            x1="10"
+                            y1="0"
+                            x2={dynamicChassisWidth - 10}
+                            y2="0"
+                            stroke={isWhiteTheme ? '#0F172A' : '#E2E8F0'}
+                            strokeWidth="1.5"
+                          />
+                          <polygon points={`10,0 17,-3.5 17,3.5`} fill={isWhiteTheme ? '#0F172A' : '#E2E8F0'} />
+                          <polygon
+                            points={`${dynamicChassisWidth - 10},0 ${dynamicChassisWidth - 17},-3.5 ${dynamicChassisWidth - 17},3.5`}
+                            fill={isWhiteTheme ? '#0F172A' : '#E2E8F0'}
+                          />
+                          <rect
+                            x={dynamicChassisWidth / 2 - 85}
+                            y="-9"
+                            width="170"
+                            height="18"
+                            fill={isWhiteTheme ? '#FFFFFF' : '#070B14'}
+                            rx="3"
+                          />
+                          <text
+                            x={dynamicChassisWidth / 2}
+                            y="4"
+                            textAnchor="middle"
+                            fill={isWhiteTheme ? '#0F172A' : '#F8FAFC'}
+                            fontSize="10.5"
+                            fontWeight="bold"
+                            fontFamily="JetBrains Mono"
+                          >
+                            Longitud Total: {totalLengthMeters.toFixed(2).replace('.', ',')} m
+                          </text>
+                        </g>
+                      </g>
+
+                      {/* Vertical Height Dimension on Left (Cota vertical 0,42 / 0,62 m - Pág. 17) */}
+                      <g transform="translate(-24, 0)">
+                        <line x1="-8" y1="10" x2="8" y2="10" stroke="#059669" strokeWidth="1.5" />
+                        <line x1="-8" y1="190" x2="8" y2="190" stroke="#059669" strokeWidth="1.5" />
+                        <line x1="0" y1="10" x2="0" y2="190" stroke="#059669" strokeWidth="1.5" />
+                        <polygon points="0,10 -3,16 3,16" fill="#059669" />
+                        <polygon points="0,190 -3,184 3,184" fill="#059669" />
+                        <rect
+                          x="-32"
+                          y="90"
+                          width="64"
+                          height="18"
+                          fill={isWhiteTheme ? '#FFFFFF' : '#070B14'}
+                          rx="3"
+                        />
+                        <text
+                          x="0"
+                          y="103"
+                          textAnchor="middle"
+                          fill="#059669"
+                          fontSize="9.5"
+                          fontWeight="bold"
+                          fontFamily="JetBrains Mono"
+                          transform="rotate(-90, 0, 103)"
+                        >
+                          0,62 / 0,42 m
+                        </text>
+                      </g>
+                    </>
+                  )}
                 </g>
 
+                {/* ---------------- TRAIN 2: PLAN VIEW (WHEN IN DUAL MODE PÁG. 17-18) ---------------- */}
+                {cutViewMode === 'dual' && (
+                  <g transform="translate(145, 305)">
+                    <text
+                      x="10"
+                      y="-16"
+                      fill="#10B981"
+                      fontSize="10"
+                      fontWeight="bold"
+                      fontFamily="JetBrains Mono"
+                      letterSpacing="1"
+                    >
+                      ▼ PLANTA (VISTA SUPERIOR NORMALIZADA PÁG. 17-18 IDAE)
+                    </text>
+
+                    {/* Outer double-wall casing */}
+                    <rect x="0" y="0" width={dynamicChassisWidth} height="200" fill="#0B132B" stroke="#334155" strokeWidth="4" rx="6" />
+                    <rect x="4" y="4" width={dynamicChassisWidth - 8} height="192" fill="#070B14" stroke="#1E293B" strokeWidth="2" />
+
+                    {/* Modules in Plan View */}
+                    {(() => {
+                      let currentOffset = 10;
+                      return enabledModules.map((mod) => {
+                        const modWidth = moduleWidths[mod.type] || 100;
+                        const modX = currentOffset;
+                        currentOffset += modWidth + 10;
+                        const isModActive = editingModuleId === mod.id;
+
+                        return (
+                          <g
+                            key={`plan-${mod.id}`}
+                            transform={`translate(${modX}, 10)`}
+                            className="cursor-pointer"
+                            onClick={() => setEditingModuleId(mod.id)}
+                          >
+                            <rect
+                              x="0"
+                              y="0"
+                              width={modWidth}
+                              height="180"
+                              rx="4"
+                              fill={
+                                isModActive
+                                  ? isWhiteTheme
+                                    ? '#E0F2FE'
+                                    : '#1E293B'
+                                  : isWhiteTheme
+                                  ? '#FFFFFF'
+                                  : '#070B14'
+                              }
+                              stroke={
+                                isModActive
+                                  ? '#0284C7'
+                                  : isWhiteTheme
+                                  ? '#CBD5E1'
+                                  : '#334155'
+                              }
+                              strokeWidth={isModActive ? '2.5' : '1.2'}
+                            />
+                            <IDAESectionSymbol
+                              mod={mod}
+                              modWidth={modWidth}
+                              isFlowActive={isFlowActive}
+                              isWhiteTheme={isWhiteTheme}
+                              viewMode="plan"
+                            />
+                          </g>
+                        );
+                      });
+                    })()}
+
+                    {/* Dual Mode Dimension Lines */}
+                    <g transform="translate(0, 218)">
+                      {(() => {
+                        let currentX = 10;
+                        return enabledModules.map((mod, idx) => {
+                          const w = moduleWidths[mod.type] || 100;
+                          const xStart = currentX;
+                          const xEnd = currentX + w;
+                          const xMid = currentX + w / 2;
+                          const dimMeters = (moduleDimensionsMeters[mod.type] || 0.4).toFixed(2).replace('.', ',');
+                          currentX += w + 10;
+
+                          return (
+                            <g key={`dim-plan-mod-${mod.id}-${idx}`}>
+                              <line x1={xStart} y1="-10" x2={xStart} y2="10" stroke="#E11D48" strokeWidth="1.2" />
+                              <line x1={xEnd} y1="-10" x2={xEnd} y2="10" stroke="#E11D48" strokeWidth="1.2" />
+                              <line x1={xStart} y1="0" x2={xEnd} y2="0" stroke="#E11D48" strokeWidth="1.2" />
+                              <polygon points={`${xStart},0 ${xStart + 5},-3 ${xStart + 5},3`} fill="#E11D48" />
+                              <polygon points={`${xEnd},0 ${xEnd - 5},-3 ${xEnd - 5},3`} fill="#E11D48" />
+                              <rect
+                                x={xMid - 16}
+                                y="-7"
+                                width="32"
+                                height="14"
+                                fill={isWhiteTheme ? '#FFFFFF' : '#070B14'}
+                                rx="2"
+                              />
+                              <text
+                                x={xMid}
+                                y="3"
+                                textAnchor="middle"
+                                fill="#E11D48"
+                                fontSize="9.5"
+                                fontWeight="bold"
+                                fontFamily="JetBrains Mono"
+                              >
+                                {dimMeters}
+                              </text>
+                            </g>
+                          );
+                        });
+                      })()}
+
+                      {/* Dual Total Length */}
+                      <g transform="translate(0, 24)">
+                        <line x1="10" y1="-8" x2="10" y2="8" stroke={isWhiteTheme ? '#0F172A' : '#E2E8F0'} strokeWidth="1.5" />
+                        <line
+                          x1={dynamicChassisWidth - 10}
+                          y1="-8"
+                          x2={dynamicChassisWidth - 10}
+                          y2="8"
+                          stroke={isWhiteTheme ? '#0F172A' : '#E2E8F0'}
+                          strokeWidth="1.5"
+                        />
+                        <line
+                          x1="10"
+                          y1="0"
+                          x2={dynamicChassisWidth - 10}
+                          y2="0"
+                          stroke={isWhiteTheme ? '#0F172A' : '#E2E8F0'}
+                          strokeWidth="1.5"
+                        />
+                        <polygon points={`10,0 17,-3.5 17,3.5`} fill={isWhiteTheme ? '#0F172A' : '#E2E8F0'} />
+                        <polygon
+                          points={`${dynamicChassisWidth - 10},0 ${dynamicChassisWidth - 17},-3.5 ${dynamicChassisWidth - 17},3.5`}
+                          fill={isWhiteTheme ? '#0F172A' : '#E2E8F0'}
+                        />
+                        <rect
+                          x={dynamicChassisWidth / 2 - 85}
+                          y="-9"
+                          width="170"
+                          height="18"
+                          fill={isWhiteTheme ? '#FFFFFF' : '#070B14'}
+                          rx="3"
+                        />
+                        <text
+                          x={dynamicChassisWidth / 2}
+                          y="4"
+                          textAnchor="middle"
+                          fill={isWhiteTheme ? '#0F172A' : '#F8FAFC'}
+                          fontSize="10.5"
+                          fontWeight="bold"
+                          fontFamily="JetBrains Mono"
+                        >
+                          Longitud Total: {totalLengthMeters.toFixed(2).replace('.', ',')} m
+                        </text>
+                      </g>
+                    </g>
+                  </g>
+                )}
+
                 {/* Air Outlet arrows: Aire Impulsado (SUP) */}
-                <g transform={`translate(${160 + dynamicChassisWidth + 25}, 110)`}>
+                <g transform={`translate(${160 + dynamicChassisWidth + 25}, ${cutViewMode === 'dual' ? 120 : 110})`}>
                   <text x="45" y="-15" textAnchor="middle" fill="#E2E8F0" fontSize="12" fontWeight="bold" fontFamily="Plus Jakarta Sans">
                     Aire Impulsado (SUP)
                   </text>
@@ -2122,6 +2595,9 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
       <IDAESymbolGuideModal
         isOpen={isSymbolGuideOpen}
         onClose={() => setIsSymbolGuideOpen(false)}
+        onSelectModuleType={(modType) => {
+          insertModuleAt(modType, enabledModules.length);
+        }}
       />
     </div>
   );
