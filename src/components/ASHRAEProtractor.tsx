@@ -98,33 +98,33 @@ export const ASHRAEProtractor: React.FC<ASHRAEProtractorProps> = ({
 
   return (
     <g className="ashrae-protractor select-none">
-      {/* Background backing plate */}
+      {/* Background backing plate: Generously expanded so all formulas, arcs, ticks, and labels fit comfortably with ample padding */}
       <rect
-        x={x0 - radius - 84}
-        y={y0 - 26}
-        width={radius + 100}
-        height={radius + 48}
+        x={x0 - radius - 116}
+        y={y0 - 44}
+        width={radius + 144}
+        height={currentActiveSHR !== null ? radius + 104 : radius + 84}
         rx="8"
         fill={
           isGreenTheme
-            ? 'rgba(254, 254, 252, 0.95)'
+            ? 'rgba(254, 254, 252, 0.96)'
             : isDarkTheme
-            ? 'rgba(10, 10, 12, 0.88)'
-            : 'rgba(255, 255, 255, 0.94)'
+            ? 'rgba(10, 10, 12, 0.92)'
+            : 'rgba(255, 255, 255, 0.96)'
         }
         stroke={
           isGreenTheme
             ? '#15803D'
             : isDarkTheme
-            ? 'rgba(255, 255, 255, 0.15)'
-            : 'rgba(2, 132, 199, 0.3)'
+            ? 'rgba(255, 255, 255, 0.2)'
+            : 'rgba(2, 132, 199, 0.4)'
         }
-        strokeWidth="1"
+        strokeWidth="1.2"
         className="pointer-events-none"
       />
 
-      {/* Protractor Titles (exact layout as on official ASHRAE Chart No. 1) */}
-      <g transform={`translate(${x0 - radius - 18}, ${y0 - 10})`} className="pointer-events-none">
+      {/* Protractor Titles (perfectly centered and spaced with zero collision) */}
+      <g transform={`translate(${x0 - 80}, ${y0 - 24})`} className="pointer-events-none">
         <text
           x="0"
           y="0"
@@ -133,14 +133,14 @@ export const ASHRAEProtractor: React.FC<ASHRAEProtractorProps> = ({
           fontSize="7.5"
           fontWeight="bold"
           fontFamily="Roboto Condensed, sans-serif"
-          letterSpacing="0.2"
+          letterSpacing="0.3"
         >
           SENSIBLE HEAT / TOTAL HEAT = Qs / Qt
         </text>
-        <line x1="-62" y1="2" x2="62" y2="2" stroke={primaryColor} strokeWidth="0.6" />
+        <line x1="-74" y1="4" x2="74" y2="4" stroke={primaryColor} strokeWidth="0.6" />
         <text
           x="0"
-          y="9"
+          y="13"
           textAnchor="middle"
           fill={secondaryColor}
           fontSize="6.5"
@@ -190,8 +190,9 @@ export const ASHRAEProtractor: React.FC<ASHRAEProtractorProps> = ({
         const yTickIn = y0 + (radius - tickLen) * sinA;
 
         // Outer Label position (SHR)
-        const xLabel = x0 - (radius + 9) * cosA;
-        const yLabel = y0 + (radius + 9) * sinA;
+        const isNearBottom = angle > 1.05;
+        const xLabel = x0 - (radius + (isNearBottom ? 12 : 9)) * cosA;
+        const yLabel = y0 + (radius + (isNearBottom ? 12 : 9)) * sinA;
 
         // Inner Tick coordinates (Delta h / Delta W)
         const xInner = x0 - innerRadius * cosA;
@@ -268,10 +269,10 @@ export const ASHRAEProtractor: React.FC<ASHRAEProtractorProps> = ({
             {item.isMajor && (
               <text
                 x={xLabel}
-                y={yLabel + 2.5}
-                textAnchor="end"
+                y={isNearBottom ? yLabel + 7 : yLabel + 2.5}
+                textAnchor={isNearBottom ? 'middle' : 'end'}
                 fill={isCurrentHovered ? accentColor : textColor}
-                fontSize="7"
+                fontSize="7.5"
                 fontWeight={isCurrentHovered ? 'bold' : 'normal'}
                 fontFamily="Fira Code, monospace"
               >
@@ -392,6 +393,33 @@ export const ASHRAEProtractor: React.FC<ASHRAEProtractorProps> = ({
               </g>
             );
           })()}
+        </g>
+      )}
+
+      {/* Active SHR Status Capsule at bottom of protractor */}
+      {currentActiveSHR !== null && (
+        <g transform={`translate(${x0 - 80}, ${y0 + radius + 22})`} className="pointer-events-none">
+          <rect
+            x="-82"
+            y="-9"
+            width="164"
+            height="18"
+            rx="4"
+            fill={isDarkTheme ? 'rgba(15, 23, 42, 0.95)' : isGreenTheme ? 'rgba(240, 253, 244, 0.96)' : 'rgba(254, 243, 199, 0.96)'}
+            stroke={accentColor}
+            strokeWidth="1"
+          />
+          <text
+            x="0"
+            y="3"
+            textAnchor="middle"
+            fill={accentColor}
+            fontSize="7.8"
+            fontWeight="bold"
+            fontFamily="Roboto Condensed, sans-serif"
+          >
+            FCS = {currentActiveSHR.toFixed(2)} · {(currentActiveSHR * 100).toFixed(0)}% Sens. / {((1 - currentActiveSHR) * 100).toFixed(0)}% Lat.
+          </text>
         </g>
       )}
 

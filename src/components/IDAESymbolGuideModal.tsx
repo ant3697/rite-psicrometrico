@@ -17,12 +17,14 @@ interface IDAESymbolGuideModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSelectModuleType?: (type: AHUModuleType) => void;
+  onOpenAhuExample?: () => void;
 }
 
 export const IDAESymbolGuideModal: React.FC<IDAESymbolGuideModalProps> = ({
   isOpen,
   onClose,
   onSelectModuleType,
+  onOpenAhuExample,
 }) => {
   const [selectedType, setSelectedType] = useState<AHUModuleType>('heat_recovery');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -63,7 +65,20 @@ export const IDAESymbolGuideModal: React.FC<IDAESymbolGuideModalProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3">
+            {onOpenAhuExample && (
+              <button
+                onClick={() => {
+                  onClose();
+                  onOpenAhuExample();
+                }}
+                className="btn-secondary text-xs !border-[#38bdf8]/40 !text-[#38bdf8] hover:!border-[#38bdf8] hover:!bg-[#38bdf8]/10"
+                title="Ver infografía con los componentes principales que componen una UTA (uta_ejemplo.png)"
+              >
+                <Layers className="w-3.5 h-3.5 text-[#38bdf8]" />
+                <span className="hidden sm:inline">Infografía Didáctica UTA</span>
+              </button>
+            )}
             <a
               href="https://www.idae.es/uploads/documentos/documentos_17_Guia_tecnica_instalaciones_de_climatizacion_con_equipos_autonomos_5bd3407b.pdf"
               target="_blank"
@@ -151,28 +166,30 @@ export const IDAESymbolGuideModal: React.FC<IDAESymbolGuideModalProps> = ({
                   <span className="text-[10px] font-mono font-bold text-slate-500 mb-2 uppercase">
                     Estilo Guía Técnica IDAE (Fondo Claro)
                   </span>
-                  <svg width="180" height="200" viewBox="0 0 160 210" className="overflow-visible">
-                    <rect x="0" y="0" width="160" height="200" rx="4" fill="#F8FAFC" stroke="#334155" strokeWidth="2" />
-                    <IDAESectionSymbol
-                      mod={{
-                        id: 'preview-mod',
-                        type: activeDef.type,
-                        name: activeDef.officialName,
-                        enabled: true,
-                        pressureDropPa: 60,
-                        params: {
-                          outdoorRatio: 0.3,
-                          recoveryEfficiency: 0.75,
-                          exitTdb: 12.8,
-                          heatingTdb: 16.5,
-                          staticPressurePa: 450,
-                          filterClass: activeDef.type === 'prefilter' ? 'G4' : 'F7',
-                        },
-                      }}
-                      modWidth={160}
-                      isFlowActive={true}
-                      isWhiteTheme={true}
-                    />
+                  <svg width="180" height="200" viewBox="0 0 160 200" className="overflow-hidden rounded-lg">
+                    <rect x="0" y="0" width="160" height="200" rx="6" fill="#F8FAFC" stroke="#334155" strokeWidth="2" />
+                    <g transform="translate(0, 12)">
+                      <IDAESectionSymbol
+                        mod={{
+                          id: 'preview-mod',
+                          type: activeDef.type,
+                          name: activeDef.officialName,
+                          enabled: true,
+                          pressureDropPa: 60,
+                          params: {
+                            outdoorRatio: 0.3,
+                            recoveryEfficiency: 0.75,
+                            exitTdb: 12.8,
+                            heatingTdb: 16.5,
+                            staticPressurePa: 450,
+                            filterClass: activeDef.type === 'prefilter' ? 'G4' : 'F7',
+                          },
+                        }}
+                        modWidth={160}
+                        isFlowActive={true}
+                        isWhiteTheme={true}
+                      />
+                    </g>
                   </svg>
                 </div>
 
@@ -181,28 +198,30 @@ export const IDAESymbolGuideModal: React.FC<IDAESymbolGuideModalProps> = ({
                   <span className="text-[10px] font-mono font-bold text-slate-400 mb-2 uppercase">
                     Estilo Blueprint CAD (Fondo Oscuro)
                   </span>
-                  <svg width="180" height="200" viewBox="0 0 160 210" className="overflow-visible">
-                    <rect x="0" y="0" width="160" height="200" rx="4" fill="#0B132B" stroke="#475569" strokeWidth="2" />
-                    <IDAESectionSymbol
-                      mod={{
-                        id: 'preview-mod-dark',
-                        type: activeDef.type,
-                        name: activeDef.officialName,
-                        enabled: true,
-                        pressureDropPa: 60,
-                        params: {
-                          outdoorRatio: 0.3,
-                          recoveryEfficiency: 0.75,
-                          exitTdb: 12.8,
-                          heatingTdb: 16.5,
-                          staticPressurePa: 450,
-                          filterClass: activeDef.type === 'prefilter' ? 'G4' : 'F7',
-                        },
-                      }}
-                      modWidth={160}
-                      isFlowActive={true}
-                      isWhiteTheme={false}
-                    />
+                  <svg width="180" height="200" viewBox="0 0 160 200" className="overflow-hidden rounded-lg">
+                    <rect x="0" y="0" width="160" height="200" rx="6" fill="#0B132B" stroke="#475569" strokeWidth="2" />
+                    <g transform="translate(0, 12)">
+                      <IDAESectionSymbol
+                        mod={{
+                          id: 'preview-mod-dark',
+                          type: activeDef.type,
+                          name: activeDef.officialName,
+                          enabled: true,
+                          pressureDropPa: 60,
+                          params: {
+                            outdoorRatio: 0.3,
+                            recoveryEfficiency: 0.75,
+                            exitTdb: 12.8,
+                            heatingTdb: 16.5,
+                            staticPressurePa: 450,
+                            filterClass: activeDef.type === 'prefilter' ? 'G4' : 'F7',
+                          },
+                        }}
+                        modWidth={160}
+                        isFlowActive={true}
+                        isWhiteTheme={false}
+                      />
+                    </g>
                   </svg>
                 </div>
               </div>

@@ -332,9 +332,9 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
       return (
         <g className="idae-symbol-intake-damper-plan">
           {/* Intake grill flange on left */}
-          <line x1="6" y1="20" x2="6" y2="180" stroke={idaeGreen} strokeWidth="3" />
+          <line x1="6" y1="20" x2="6" y2="165" stroke={idaeGreen} strokeWidth="3" />
           {/* Top-down damper louvres axes */}
-          {[40, 80, 120, 160].map((py, idx) => (
+          {[36, 72, 108, 144].map((py, idx) => (
             <g key={`damper-plan-${py}`} transform={`translate(24, ${py})`}>
               <circle cx="0" cy="0" r="4" fill={idaeGreen} />
               <line
@@ -349,7 +349,7 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
             </g>
           ))}
           {/* Flow vector arrows */}
-          <g transform={`translate(${modWidth / 2}, 100)`}>
+          <g transform={`translate(${modWidth / 2}, 95)`}>
             <line x1="-15" y1="0" x2="15" y2="0" stroke={idaeGreen} strokeWidth="2.5" />
             <polygon points="15,0 9,-4 9,4" fill={idaeGreen} />
           </g>
@@ -359,47 +359,47 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
 
     return (
       <g className="idae-symbol-intake-damper">
-        {/* Weather rain louvre / Visera exterior de intemperie con rejilla antipájaros */}
-        <g transform="translate(6, 15)">
+        {/* Weather rain louvre / Visera exterior de intemperie con rejilla antipájaros (Bounded strictly in 170px) */}
+        <g transform="translate(6, 10)">
           <path
-            d="M 0 0 L 12 -5 L 12 170 L 0 165 Z"
+            d="M 0 0 L 10 -4 L 10 148 L 0 144 Z"
             fill={isWhiteTheme ? '#F1F5F9' : '#0F172A'}
             stroke={primaryStroke}
             strokeWidth="1.5"
           />
-          {[20, 45, 70, 95, 120, 145].map((ly) => (
+          {[16, 38, 60, 82, 104, 126].map((ly) => (
             <line
               key={`louvre-${ly}`}
               x1="2"
               y1={ly}
-              x2="10"
+              x2="8"
               y2={ly + 8}
               stroke={idaeGreen}
-              strokeWidth="2.5"
+              strokeWidth="2.2"
               strokeLinecap="round"
             />
           ))}
-          <line x1="12" y1="0" x2="12" y2="165" stroke={idaeGreen} strokeWidth="1" strokeDasharray="2,2" />
+          <line x1="10" y1="0" x2="10" y2="148" stroke={idaeGreen} strokeWidth="1" strokeDasharray="2,2" />
         </g>
 
         {/* Damper casing with aerodynamic opposed blades */}
-        <g transform="translate(24, 20)">
+        <g transform="translate(24, 14)">
           {/* Actuator Servomotor M on top */}
-          <g transform={`translate(${(modWidth - 45) / 2}, -10)`}>
+          <g transform={`translate(${(modWidth - 45) / 2}, -6)`}>
             <rect
               x="-12"
-              y="-14"
+              y="-12"
               width="24"
-              height="14"
+              height="12"
               rx="2"
               fill={isWhiteTheme ? '#E2E8F0' : '#1E293B'}
               stroke={primaryStroke}
               strokeWidth="1.5"
             />
-            <circle cx="0" cy="-7" r="4.5" fill={idaeGreen} />
+            <circle cx="0" cy="-6" r="4" fill={idaeGreen} />
             <text
               x="0"
-              y="-4"
+              y="-3"
               textAnchor="middle"
               fill="#FFFFFF"
               fontSize="6"
@@ -408,35 +408,35 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
             >
               M
             </text>
-            <line x1="0" y1="0" x2="0" y2="15" stroke={primaryStroke} strokeWidth="2" />
+            <line x1="0" y1="0" x2="0" y2="14" stroke={primaryStroke} strokeWidth="2" />
           </g>
 
           {/* Connecting tie-rod linkage bar */}
           <line
             x1={(modWidth - 40) / 2 + 16}
-            y1="25"
+            y1="18"
             x2={(modWidth - 40) / 2 + 16}
-            y2="135"
+            y2="118"
             stroke={mutedStroke}
             strokeWidth="1.5"
             strokeDasharray="3,2"
           />
 
-          {/* 4 Opposed Aerodynamic Blades */}
-          {[25, 60, 95, 130].map((dy, idx) => {
+          {/* 4 Opposed Aerodynamic Blades strictly inside section window */}
+          {[18, 50, 82, 114].map((dy, idx) => {
             const sign = idx % 2 === 0 ? 1 : -1;
             const angle = sign * bladeAngle;
             const bladeLength = Math.max(24, modWidth - 52);
             return (
               <g key={`blade-${dy}`} transform={`translate(${bladeLength / 2}, ${dy})`}>
-                <circle cx="0" cy="0" r="4" fill={isWhiteTheme ? '#047857' : '#10B981'} />
+                <circle cx="0" cy="0" r="3.5" fill={isWhiteTheme ? '#047857' : '#10B981'} />
                 <line
                   x1={-bladeLength / 2}
                   y1="0"
                   x2={bladeLength / 2}
                   y2="0"
                   stroke={isWhiteTheme ? '#047857' : '#34D399'}
-                  strokeWidth="3.5"
+                  strokeWidth="3.2"
                   strokeLinecap="round"
                   transform={`rotate(${angle})`}
                 />
@@ -446,14 +446,14 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
           })}
         </g>
 
-        {/* ODA Technical badge */}
-        <g transform={`translate(${modWidth / 2}, 175)`}>
+        {/* ODA Technical badge safely framed above the bottom margin */}
+        <g transform={`translate(${modWidth / 2}, 144)`}>
           <rect
-            x="-26"
-            y="-10"
-            width="52"
-            height="18"
-            rx="4"
+            x="-32"
+            y="-7"
+            width="64"
+            height="14"
+            rx="3.5"
             fill={isWhiteTheme ? '#ECFDF5' : '#064E3B'}
             stroke={idaeGreen}
             strokeWidth="1.5"
@@ -463,7 +463,7 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
             y="3"
             textAnchor="middle"
             fill={isWhiteTheme ? '#065F46' : '#A7F3D0'}
-            fontSize="9"
+            fontSize="8"
             fontWeight="bold"
             fontFamily="JetBrains Mono"
           >
@@ -508,39 +508,109 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
       );
     }
 
+    // Canonical AutoCAD Prefiltro geometry (Normativa Técnica Española / ATECYR / IDAE)
+    const x0 = 0;
+    const y0 = 0;
+    const boxW = modWidth;
+    const boxH = 174;
+
+    // Vertical partition separating the left chevron prefilter from the right bag filter
+    const xDiv = x0 + boxW * 0.28;
+    const wLeft = xDiv - x0;
+    const xMid = x0 + wLeft * 0.5;
+
+    // Left stepped chevron baffles (8 repeating Z-labyrinth lamellas from AutoCAD Prefiltro.svg)
+    const numChevronSteps = 8;
+    const chevronStepH = boxH / numChevronSteps;
+    const chevronRise = chevronStepH * 0.38;
+    const chevronDrop = chevronStepH * 0.44;
+
+    // Right chamber: 6 tapered bag filters (bolsas trapezoidales de alta eficacia con punta plana)
+    const wRight = x0 + boxW - xDiv;
+    const xBagEnd = xDiv + wRight * 0.88; // clearance before right wall
+    const numBags = 6;
+    const bagH = boxH / numBags;
+    const tipHalfH = bagH * 0.18;
+
+    const cadRedStroke = isWhiteTheme ? '#DC2626' : '#EF4444';
+
     return (
       <g className="idae-symbol-prefilter">
-        {/* Outer metal filter subframe (Canónico IDAE Fig. 1, 2) */}
+        {/* Outer AutoCAD metal casing frame */}
         <rect
-          x="8"
-          y="15"
-          width={modWidth - 16}
-          height="170"
-          rx="2"
-          fill={isWhiteTheme ? '#FFF1F2' : '#2A0E18'}
-          stroke={idaePink}
+          x={x0}
+          y={y0}
+          width={boxW}
+          height={boxH}
+          fill={isWhiteTheme ? '#FEF2F2' : '#1A0B0E'}
+          stroke={cadRedStroke}
           strokeWidth="1.8"
         />
 
-        {/* Continuous Sharp V-Pleated Filter Media (Zig-zag en acordeón canónico Fig. 1, 2, 73) */}
-        <path
-          d={`M 14 22
-             L ${modWidth - 14} 38 L 14 54
-             L ${modWidth - 14} 70 L 14 86
-             L ${modWidth - 14} 102 L 14 118
-             L ${modWidth - 14} 134 L 14 150
-             L ${modWidth - 14} 166 L 14 178`}
-          fill="none"
-          stroke={idaePink}
-          strokeWidth="3.2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
+        {/* Vertical divider line separating prefilter stage and bag stage */}
+        <line
+          x1={xDiv}
+          y1={y0}
+          x2={xDiv}
+          y2={y0 + boxH}
+          stroke={cadRedStroke}
+          strokeWidth="1.8"
         />
+
+        {/* LEFT SECTION: Stepped Z-chevron / Labyrinth Pleated Lamellas (AutoCAD Prefiltro.svg) */}
+        <g className="prefilter-cad-chevron-stage">
+          {Array.from({ length: numChevronSteps + 1 }).map((_, i) => {
+            const yStart = y0 + i * chevronStepH;
+            const yMidTop = yStart - chevronRise;
+            const yMidBot = yMidTop + chevronDrop;
+            const yEnd = yMidBot - chevronRise;
+
+            return (
+              <path
+                key={`chevron-${i}`}
+                d={`M ${x0} ${Math.min(y0 + boxH, Math.max(y0, yStart))}
+                   L ${xMid} ${Math.min(y0 + boxH, Math.max(y0, yMidTop))}
+                   L ${xMid} ${Math.min(y0 + boxH, Math.max(y0, yMidBot))}
+                   L ${xDiv} ${Math.min(y0 + boxH, Math.max(y0, yEnd))}`}
+                fill="none"
+                stroke={cadRedStroke}
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="miter"
+              />
+            );
+          })}
+        </g>
+
+        {/* RIGHT SECTION: 6 Tapered Bag Filter Pockets with Flat End-Caps (AutoCAD Prefiltro.svg) */}
+        <g className="prefilter-cad-bag-stage">
+          {Array.from({ length: numBags }).map((_, k) => {
+            const yInletTop = y0 + k * bagH;
+            const yInletBot = y0 + (k + 1) * bagH;
+            const yCenter = y0 + (k + 0.5) * bagH;
+            const yTipTop = yCenter - tipHalfH;
+            const yTipBot = yCenter + tipHalfH;
+
+            return (
+              <path
+                key={`cad-bag-${k}`}
+                d={`M ${xDiv} ${yInletTop}
+                   L ${xBagEnd} ${yTipTop}
+                   L ${xBagEnd} ${yTipBot}
+                   L ${xDiv} ${yInletBot}`}
+                fill={isWhiteTheme ? 'rgba(239, 68, 68, 0.04)' : 'rgba(239, 68, 68, 0.08)'}
+                stroke={cadRedStroke}
+                strokeWidth="1.6"
+                strokeLinejoin="round"
+              />
+            );
+          })}
+        </g>
 
         {/* Upstream / Downstream Differential Manometer (ΔP) Gauge according to IDAE */}
         <g transform={`translate(${modWidth / 2}, 8)`}>
-          <circle cx="0" cy="0" r="9" fill={isWhiteTheme ? '#FFFFFF' : '#1E293B'} stroke={idaePink} strokeWidth="1.5" />
-          <text x="0" y="3" textAnchor="middle" fill={idaePink} fontSize="7" fontWeight="bold" fontFamily="JetBrains Mono">
+          <circle cx="0" cy="0" r="9" fill={isWhiteTheme ? '#FFFFFF' : '#1E293B'} stroke={cadRedStroke} strokeWidth="1.5" />
+          <text x="0" y="3" textAnchor="middle" fill={cadRedStroke} fontSize="7" fontWeight="bold" fontFamily="JetBrains Mono">
             ΔP
           </text>
           <path d="M -9 0 L -16 0 L -16 18" fill="none" stroke={mutedStroke} strokeWidth="1" strokeDasharray="2,1" />
@@ -548,33 +618,8 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
         </g>
 
         {/* Quick-latch clamping handles */}
-        <rect x="4" y="45" width="4" height="14" rx="1" fill={primaryStroke} />
-        <rect x="4" y="135" width="4" height="14" rx="1" fill={primaryStroke} />
-
-        {/* Canonical IDAE label badge */}
-        <g transform={`translate(${modWidth / 2}, 175)`}>
-          <rect
-            x="-26"
-            y="-10"
-            width="52"
-            height="18"
-            rx="4"
-            fill={isWhiteTheme ? '#FFE4E6' : '#4C0519'}
-            stroke={idaePink}
-            strokeWidth="1.5"
-          />
-          <text
-            x="0"
-            y="3"
-            textAnchor="middle"
-            fill={isWhiteTheme ? '#9F1239' : '#FECDD3'}
-            fontSize="9"
-            fontWeight="bold"
-            fontFamily="JetBrains Mono"
-          >
-            {pClass} (0,4m)
-          </text>
-        </g>
+        <rect x="2" y="45" width="4" height="14" rx="1" fill={primaryStroke} />
+        <rect x="2" y="115" width="4" height="14" rx="1" fill={primaryStroke} />
       </g>
     );
   }
@@ -604,11 +649,10 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
       <g className="idae-symbol-prefilter-flat">
         {/* Compact narrow metal casing (0,15 m según Pág. 18 IDAE) */}
         <rect
-          x="4"
-          y="15"
-          width={modWidth - 8}
-          height="170"
-          rx="2"
+          x="0"
+          y="0"
+          width={modWidth}
+          height="174"
           fill={isWhiteTheme ? '#FFF1F2' : '#2A0E18'}
           stroke={idaePink}
           strokeWidth="1.8"
@@ -616,15 +660,12 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
 
         {/* Dense compact flat pleats (Pliegues densos en zig-zag Pág. 18) */}
         <path
-          d={`M 8 20
-             L ${modWidth - 8} 30 L 8 40
-             L ${modWidth - 8} 50 L 8 60
-             L ${modWidth - 8} 70 L 8 80
-             L ${modWidth - 8} 90 L 8 100
-             L ${modWidth - 8} 110 L 8 120
-             L ${modWidth - 8} 130 L 8 140
-             L ${modWidth - 8} 150 L 8 160
-             L ${modWidth - 8} 170 L 8 180`}
+          d={`M 6 12
+             L ${modWidth - 6} 28 L 6 44
+             L ${modWidth - 6} 60 L 6 76
+             L ${modWidth - 6} 92 L 6 108
+             L ${modWidth - 6} 124 L 6 140
+             L ${modWidth - 6} 156 L 6 166`}
           fill="none"
           stroke={idaePink}
           strokeWidth="2.4"
@@ -637,31 +678,6 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
           <circle cx="0" cy="0" r="7.5" fill={isWhiteTheme ? '#FFFFFF' : '#1E293B'} stroke={idaePink} strokeWidth="1.2" />
           <text x="0" y="2.5" textAnchor="middle" fill={idaePink} fontSize="6" fontWeight="bold" fontFamily="JetBrains Mono">
             ΔP
-          </text>
-        </g>
-
-        {/* Pág. 18 Badge: 0,15 m */}
-        <g transform={`translate(${modWidth / 2}, 175)`}>
-          <rect
-            x="-22"
-            y="-10"
-            width="44"
-            height="18"
-            rx="4"
-            fill={isWhiteTheme ? '#FFE4E6' : '#4C0519'}
-            stroke={idaePink}
-            strokeWidth="1.5"
-          />
-          <text
-            x="0"
-            y="3"
-            textAnchor="middle"
-            fill={isWhiteTheme ? '#9F1239' : '#FECDD3'}
-            fontSize="8"
-            fontWeight="bold"
-            fontFamily="JetBrains Mono"
-          >
-            {pClass}·0,15m
           </text>
         </g>
       </g>
@@ -694,12 +710,12 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
 
     return (
       <g className="idae-symbol-mixing-box">
-        {/* Mixing chamber body */}
+        {/* Mixing chamber body strictly contained within compartment */}
         <rect
-          x="8"
-          y="15"
-          width={modWidth - 16}
-          height="170"
+          x="6"
+          y="8"
+          width={modWidth - 12}
+          height="154"
           rx="4"
           fill={isWhiteTheme ? '#FFFBEB' : '#1F1607'}
           stroke="#F59E0B"
@@ -707,8 +723,8 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
         />
 
         {/* Upper Return Air Intake (RCA) with vertical damper blades */}
-        <g transform={`translate(${modWidth / 2}, 15)`}>
-          <g transform="translate(0, -5)">
+        <g transform={`translate(${modWidth / 2}, 14)`}>
+          <g transform="translate(0, -4)">
             <line x1="0" y1="-8" x2="0" y2="4" stroke="#F59E0B" strokeWidth="2.5" />
             <polygon points="0,6 -4,0 4,0" fill="#F59E0B" />
             <text x="10" y="0" fill="#F59E0B" fontSize="8" fontWeight="bold" fontFamily="JetBrains Mono">
@@ -717,53 +733,53 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
           </g>
 
           {[-25, -10, 5, 20].map((bx) => (
-            <g key={`rca-blade-${bx}`} transform={`translate(${bx}, 14)`}>
-              <line x1="0" y1="0" x2="0" y2="20" stroke="#F59E0B" strokeWidth="2.5" strokeLinecap="round" />
-              <circle cx="0" cy="10" r="2.5" fill="#D97706" />
+            <g key={`rca-blade-${bx}`} transform={`translate(${bx}, 12)`}>
+              <line x1="0" y1="0" x2="0" y2="18" stroke="#F59E0B" strokeWidth="2.5" strokeLinecap="round" />
+              <circle cx="0" cy="9" r="2.5" fill="#D97706" />
             </g>
           ))}
         </g>
 
         {/* Central Modulating Common Actuator Servomotor M */}
-        <g transform={`translate(${modWidth / 2}, 68)`}>
-          <circle cx="0" cy="0" r="11" fill={isWhiteTheme ? '#FFFFFF' : '#292524'} stroke="#F59E0B" strokeWidth="2" />
-          <text x="0" y="4" textAnchor="middle" fill="#F59E0B" fontSize="10" fontWeight="bold" fontFamily="JetBrains Mono">
+        <g transform={`translate(${modWidth / 2}, 62)`}>
+          <circle cx="0" cy="0" r="10" fill={isWhiteTheme ? '#FFFFFF' : '#292524'} stroke="#F59E0B" strokeWidth="2" />
+          <text x="0" y="3.5" textAnchor="middle" fill="#F59E0B" fontSize="9.5" fontWeight="bold" fontFamily="JetBrains Mono">
             M
           </text>
-          <line x1="0" y1="-11" x2="0" y2="-35" stroke="#F59E0B" strokeWidth="1.5" strokeDasharray="3,2" />
-          <line x1="-11" y1="0" x2="-35" y2="0" stroke="#F59E0B" strokeWidth="1.5" strokeDasharray="3,2" />
+          <line x1="0" y1="-10" x2="0" y2="-32" stroke="#F59E0B" strokeWidth="1.5" strokeDasharray="3,2" />
+          <line x1="-10" y1="0" x2="-32" y2="0" stroke="#F59E0B" strokeWidth="1.5" strokeDasharray="3,2" />
         </g>
 
         {/* Lower ODA horizontal damper */}
-        <g transform="translate(18, 115)">
-          {[-18, 0, 18].map((dy) => (
-            <g key={`mix-blade-${dy}`} transform={`translate(0, ${dy + 18})`}>
-              <line x1="0" y1="0" x2="26" y2="0" stroke={idaeGreen} strokeWidth="2.5" />
-              <circle cx="13" cy="0" r="2.5" fill="#059669" />
+        <g transform="translate(16, 102)">
+          {[-16, 0, 16].map((dy) => (
+            <g key={`mix-blade-${dy}`} transform={`translate(0, ${dy + 16})`}>
+              <line x1="0" y1="0" x2="24" y2="0" stroke={idaeGreen} strokeWidth="2.5" />
+              <circle cx="12" cy="0" r="2.5" fill="#059669" />
             </g>
           ))}
         </g>
 
         {/* Resulting air blending streamline vortex */}
-        <g transform={`translate(${modWidth - 28}, 115)`}>
+        <g transform={`translate(${modWidth - 26}, 102)`}>
           <path
-            d="M -15 -25 Q 5 0 -15 25 Q 10 30 15 15"
+            d="M -15 -22 Q 5 0 -15 22 Q 10 26 15 12"
             fill="none"
             stroke="#F59E0B"
             strokeWidth="2"
             strokeDasharray="4,2"
             className={isFlowActive ? 'animate-pulse' : ''}
           />
-          <polygon points="17,15 10,12 14,19" fill="#F59E0B" />
+          <polygon points="17,12 10,9 14,16" fill="#F59E0B" />
         </g>
 
-        {/* Label */}
-        <g transform={`translate(${modWidth / 2}, 175)`}>
+        {/* Label strictly positioned inside the compartment */}
+        <g transform={`translate(${modWidth / 2}, 148)`}>
           <rect
-            x="-36"
-            y="-10"
-            width="72"
-            height="18"
+            x="-42"
+            y="-8"
+            width="84"
+            height="16"
             rx="4"
             fill={isWhiteTheme ? '#FEF3C7' : '#451A03'}
             stroke="#F59E0B"
@@ -774,7 +790,7 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
             y="3"
             textAnchor="middle"
             fill={isWhiteTheme ? '#92400E' : '#FDE68A'}
-            fontSize="8.5"
+            fontSize="8"
             fontWeight="bold"
             fontFamily="JetBrains Mono"
           >
@@ -900,23 +916,23 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
         </g>
 
         {/* Sloped condensation drain tray under recovery section with P-trap */}
-        <g transform="translate(12, 166)">
+        <g transform="translate(12, 138)">
           <polygon
-            points={`0,0 ${modWidth - 24},0 ${modWidth - 32},6 8,6`}
+            points={`0,0 ${modWidth - 24},0 ${modWidth - 32},5 8,5`}
             fill="#0284C7"
             stroke="#38BDF8"
             strokeWidth="1"
           />
           <path
-            d="M 18 6 L 18 16 Q 18 22 24 22 L 30 22 Q 36 22 36 16 L 36 20 Q 36 25 42 25 L 48 25"
+            d="M 18 5 L 18 12 Q 18 16 22 16 L 26 16 Q 30 16 30 12 L 30 15 Q 30 18 34 18 L 40 18"
             fill="none"
             stroke="#0284C7"
-            strokeWidth="2"
+            strokeWidth="1.8"
           />
         </g>
 
         {/* Norm label */}
-        <g transform={`translate(${modWidth / 2}, 184)`}>
+        <g transform={`translate(${modWidth / 2}, 152)`}>
           <text
             x="0"
             y="3"
@@ -967,128 +983,50 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
       );
     }
 
+    // Canonical AutoCAD Bateria-.svg Geometry (Diagonal slash + minus sign)
+    const x0 = 0;
+    const y0 = 0;
+    const boxW = modWidth;
+    const boxH = 174;
+
+    const cadCyan = isWhiteTheme ? '#0284C7' : '#38BDF8';
+    const yMinus = y0 + boxH * 0.16;
+    const x1Minus = x0 + boxW * 0.16;
+    const x2Minus = x0 + boxW * 0.64;
+
     return (
       <g className="idae-symbol-cooling-coil">
-        {/* Outer coil casing */}
+        {/* Outer AutoCAD Metal Coil Casing */}
         <rect
-          x="8"
-          y="15"
-          width={modWidth - 16}
-          height="155"
-          rx="3"
-          fill={isWhiteTheme ? '#F0F9FF' : '#082F49'}
-          stroke={idaeBlue}
-          strokeWidth="2"
+          x={x0}
+          y={y0}
+          width={boxW}
+          height={boxH}
+          fill={isWhiteTheme ? '#F0F9FF' : '#041E2C'}
+          stroke={cadCyan}
+          strokeWidth="1.8"
         />
 
-        {/* CANONICAL IDAE DIAGONAL CROSS "X" FROM CORNER TO CORNER (FIG. 1, 2, 11, 16) */}
-        <line x1="12" y1="18" x2={modWidth - 12} y2="167" stroke={idaeBlue} strokeWidth="1.8" strokeDasharray="4,2" />
-        <line x1={modWidth - 12} y1="18" x2="12" y2="167" stroke={idaeBlue} strokeWidth="1.8" strokeDasharray="4,2" />
+        {/* Canonical AutoCAD Diagonal slash from bottom-left to top-right (Bateria-.svg) */}
+        <line
+          x1={x0}
+          y1={y0 + boxH}
+          x2={x0 + boxW}
+          y2={y0}
+          stroke={cadCyan}
+          strokeWidth="2.2"
+        />
 
-        {/* Staggered Multi-Row Copper Tube Array (Matriz en tresbolillo) */}
-        <g transform="translate(16, 24)">
-          {[0, 1, 2, 3].map((col) => {
-            const cx = col * 18 + 8;
-            const yOffset = col % 2 === 0 ? 0 : 9;
-            return (
-              <g key={`cool-col-${col}`}>
-                <line x1={cx} y1="0" x2={cx} y2="136" stroke={gridLine} strokeWidth="1" />
-                {[12, 30, 48, 66, 84, 102, 120].map((rowY) => (
-                  <circle
-                    key={`tube-${col}-${rowY}`}
-                    cx={cx}
-                    cy={rowY + yOffset}
-                    r="3.8"
-                    fill={idaeBlue}
-                    stroke="#38BDF8"
-                    strokeWidth="1"
-                    opacity="0.85"
-                  />
-                ))}
-              </g>
-            );
-          })}
-        </g>
-
-        {/* CANONICAL IDAE SIGN BOX "[−]" IN UPPER-RIGHT / CENTER (FIG. 1, 2, 11) */}
-        <g transform={`translate(${modWidth - 28}, 28)`}>
-          <rect x="-10" y="-10" width="20" height="20" rx="3" fill={idaeBlue} stroke="#BAE6FD" strokeWidth="1.5" />
-          <text x="0" y="4" textAnchor="middle" fill="#FFFFFF" fontSize="16" fontWeight="bold">−</text>
-        </g>
-
-        {/* Droplet eliminator lamas downstream */}
-        <g transform={`translate(${modWidth - 18}, 24)`}>
-          {[10, 30, 50, 70, 90, 110, 130].map((dy) => (
-            <path
-              key={`eliminator-${dy}`}
-              d={`M 0 ${dy} L 4 ${dy + 4} L 0 ${dy + 8}`}
-              fill="none"
-              stroke="#38BDF8"
-              strokeWidth="2"
-              strokeLinecap="round"
-            />
-          ))}
-        </g>
-
-        {/* Proportional 3-Way Valve with Servomotor M */}
-        <g transform={`translate(${modWidth / 2}, 6)`}>
-          <polygon points="-7,-4 0,0 -7,4" fill={idaeBlue} />
-          <polygon points="7,-4 0,0 7,4" fill={idaeBlue} />
-          <circle cx="0" cy="-12" r="4.5" fill="#38BDF8" />
-          <text x="0" y="-10" textAnchor="middle" fill="#FFFFFF" fontSize="5.5" fontWeight="bold">
-            M
-          </text>
-        </g>
-
-        {/* Sloped Stainless Steel Condensate Tray with P-trap Siphon */}
-        <g transform="translate(8, 168)">
-          <polygon
-            points={`0,0 ${modWidth - 16},0 ${modWidth - 22},12 6,12`}
-            fill={idaeBlue}
-            stroke="#38BDF8"
-            strokeWidth="1.5"
-          />
-          <path
-            d="M 18 12 L 18 24 Q 18 30 25 30 L 32 30 Q 39 30 39 24 L 39 28 Q 39 34 46 34 L 54 34"
-            fill="none"
-            stroke={idaeBlue}
-            strokeWidth="2.5"
-          />
-          <circle cx="39" cy="27" r="3" fill="#38BDF8" />
-        </g>
-
-        {/* Falling condensate droplets */}
-        {isFlowActive && (
-          <g transform={`translate(${modWidth / 2 - 10}, 145)`} className="animate-bounce">
-            <circle cx="0" cy="0" r="2.5" fill="#38BDF8" />
-            <circle cx="15" cy="8" r="2" fill="#38BDF8" />
-          </g>
-        )}
-
-        {/* Cold Badge & Exit Temperature */}
-        <g transform={`translate(${modWidth / 2}, 184)`}>
-          <rect
-            x="-28"
-            y="-10"
-            width="56"
-            height="18"
-            rx="4"
-            fill={isWhiteTheme ? '#E0F2FE' : '#0369A1'}
-            stroke={idaeBlue}
-            strokeWidth="1.5"
-          />
-          <text
-            x="0"
-            y="3"
-            textAnchor="middle"
-            fill={isWhiteTheme ? '#0369A1' : '#FFFFFF'}
-            fontSize="9"
-            fontWeight="bold"
-            fontFamily="JetBrains Mono"
-          >
-            BF (−) {exitTdb}°C
-          </text>
-        </g>
+        {/* Canonical AutoCAD Horizontal Minus Sign '—' in top-left (Bateria-.svg) */}
+        <line
+          x1={x1Minus}
+          y1={yMinus}
+          x2={x2Minus}
+          y2={yMinus}
+          stroke={cadCyan}
+          strokeWidth="2.8"
+          strokeLinecap="round"
+        />
       </g>
     );
   }
@@ -1126,108 +1064,60 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
       );
     }
 
+    // Canonical AutoCAD Bateria-_1.svg Geometry (Diagonal slash + plus sign)
+    const x0 = 0;
+    const y0 = 0;
+    const boxW = modWidth;
+    const boxH = 174;
+
+    const cadRed = isWhiteTheme ? '#DC2626' : '#EF4444';
+    const cxPlus = x0 + boxW * 0.38;
+    const cyPlus = y0 + boxH * 0.16;
+    const armH = Math.min(boxW * 0.24, 18);
+    const armV = Math.min(boxH * 0.08, 16);
+
     return (
       <g className="idae-symbol-heating-coil">
-        {/* Outer coil casing */}
+        {/* Outer AutoCAD Metal Coil Casing */}
         <rect
-          x="8"
-          y="15"
-          width={modWidth - 16}
-          height="155"
-          rx="3"
-          fill={isWhiteTheme ? '#FFF1F2' : '#450A0A'}
-          stroke={idaeRed}
-          strokeWidth="2"
+          x={x0}
+          y={y0}
+          width={boxW}
+          height={boxH}
+          fill={isWhiteTheme ? '#FFF1F2' : '#2A0606'}
+          stroke={cadRed}
+          strokeWidth="1.8"
         />
 
-        {/* CANONICAL IDAE DIAGONAL CROSS "X" FROM CORNER TO CORNER (FIG. 1, 2, 11, 16) */}
-        <line x1="12" y1="18" x2={modWidth - 12} y2="167" stroke={idaeRed} strokeWidth="1.8" strokeDasharray="4,2" />
-        <line x1={modWidth - 12} y1="18" x2="12" y2="167" stroke={idaeRed} strokeWidth="1.8" strokeDasharray="4,2" />
+        {/* Canonical AutoCAD Diagonal slash from bottom-left to top-right (Bateria-_1.svg) */}
+        <line
+          x1={x0}
+          y1={y0 + boxH}
+          x2={x0 + boxW}
+          y2={y0}
+          stroke={cadRed}
+          strokeWidth="2.2"
+        />
 
-        {/* Thermal Red Finned Tubes in Staggered Matrix */}
-        <g transform="translate(16, 24)">
-          {[0, 1, 2].map((col) => {
-            const cx = col * 20 + 10;
-            const yOffset = col % 2 === 0 ? 0 : 10;
-            return (
-              <g key={`heat-col-${col}`}>
-                <line
-                  x1={cx}
-                  y1="0"
-                  x2={cx}
-                  y2="136"
-                  stroke={isWhiteTheme ? '#FECDD3' : '#7F1D1D'}
-                  strokeWidth="1.5"
-                />
-                {[12, 32, 52, 72, 92, 112].map((rowY) => (
-                  <circle
-                    key={`heat-tube-${col}-${rowY}`}
-                    cx={cx}
-                    cy={rowY + yOffset}
-                    r="4.2"
-                    fill="#EF4444"
-                    stroke={idaeRed}
-                    strokeWidth="1.2"
-                    opacity="0.85"
-                  />
-                ))}
-              </g>
-            );
-          })}
-        </g>
-
-        {/* CANONICAL IDAE SIGN BOX "[+]" IN UPPER-RIGHT / CENTER (FIG. 1, 2, 11, 16) */}
-        <g transform={`translate(${modWidth - 28}, 28)`}>
-          <rect x="-10" y="-10" width="20" height="20" rx="3" fill={idaeRed} stroke="#FEE2E2" strokeWidth="1.5" />
-          <text x="0" y="4" textAnchor="middle" fill="#FFFFFF" fontSize="16" fontWeight="bold">+</text>
-        </g>
-
-        {/* Safety Anti-Freeze Capillary Thermostat (Frost Stat) */}
-        <g transform="translate(14, 28)">
-          <path
-            d={`M 0 0 Q ${modWidth - 28} 40 0 80 Q ${modWidth - 28} 120 0 130`}
-            fill="none"
-            stroke="#F59E0B"
-            strokeWidth="1.5"
-            strokeDasharray="4,2"
-          />
-          <circle cx="0" cy="0" r="3" fill="#F59E0B" />
-        </g>
-
-        {/* Modulating Valve with Actuator M */}
-        <g transform={`translate(${modWidth / 2}, 6)`}>
-          <polygon points="-7,-4 0,0 -7,4" fill={idaeRed} />
-          <polygon points="7,-4 0,0 7,4" fill={idaeRed} />
-          <circle cx="0" cy="-12" r="4.5" fill="#EF4444" />
-          <text x="0" y="-10" textAnchor="middle" fill="#FFFFFF" fontSize="5.5" fontWeight="bold">
-            M
-          </text>
-        </g>
-
-        {/* Heat Badge */}
-        <g transform={`translate(${modWidth / 2}, 184)`}>
-          <rect
-            x="-28"
-            y="-10"
-            width="56"
-            height="18"
-            rx="4"
-            fill={isWhiteTheme ? '#FEE2E2' : '#991B1B'}
-            stroke={idaeRed}
-            strokeWidth="1.5"
-          />
-          <text
-            x="0"
-            y="3"
-            textAnchor="middle"
-            fill={isWhiteTheme ? '#991B1B' : '#FFFFFF'}
-            fontSize="9"
-            fontWeight="bold"
-            fontFamily="JetBrains Mono"
-          >
-            BC (+) {heatTdb}°C
-          </text>
-        </g>
+        {/* Canonical AutoCAD Plus Sign '+' in top-left (Bateria-_1.svg) */}
+        <line
+          x1={cxPlus - armH}
+          y1={cyPlus}
+          x2={cxPlus + armH}
+          y2={cyPlus}
+          stroke={cadRed}
+          strokeWidth="2.8"
+          strokeLinecap="round"
+        />
+        <line
+          x1={cxPlus}
+          y1={cyPlus - armV}
+          x2={cxPlus}
+          y2={cyPlus + armV}
+          stroke={cadRed}
+          strokeWidth="2.8"
+          strokeLinecap="round"
+        />
       </g>
     );
   }
@@ -1240,10 +1130,10 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
       <g className="idae-symbol-electric-heater">
         {/* Outer casing */}
         <rect
-          x="8"
-          y="15"
-          width={modWidth - 16}
-          height="155"
+          x="6"
+          y="8"
+          width={modWidth - 12}
+          height="154"
           rx="3"
           fill={isWhiteTheme ? '#FFF1F2' : '#450A0A'}
           stroke={idaeRed}
@@ -1251,8 +1141,8 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
         />
 
         {/* Canonical IDAE Diagonal Cross "X" */}
-        <line x1="12" y1="18" x2={modWidth - 12} y2="167" stroke={idaeRed} strokeWidth="1.5" strokeDasharray="3,3" opacity="0.6" />
-        <line x1={modWidth - 12} y1="18" x2="12" y2="167" stroke={idaeRed} strokeWidth="1.5" strokeDasharray="3,3" opacity="0.6" />
+        <line x1="10" y1="12" x2={modWidth - 10} y2="158" stroke={idaeRed} strokeWidth="1.5" strokeDasharray="3,3" opacity="0.6" />
+        <line x1={modWidth - 10} y1="12" x2="10" y2="158" stroke={idaeRed} strokeWidth="1.5" strokeDasharray="3,3" opacity="0.6" />
 
         {/* Armored Electrical Resistance Rods in Heating Wave */}
         <g transform="translate(18, 28)">
@@ -1290,12 +1180,12 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
         </g>
 
         {/* Badge */}
-        <g transform={`translate(${modWidth / 2}, 184)`}>
+        <g transform={`translate(${modWidth / 2}, 148)`}>
           <rect
             x="-36"
-            y="-10"
+            y="-8"
             width="72"
-            height="18"
+            height="16"
             rx="4"
             fill={isWhiteTheme ? '#FEE2E2' : '#991B1B'}
             stroke={idaeRed}
@@ -1349,14 +1239,13 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
       <g className="idae-symbol-belt-fan">
         {/* Fan casing chamber */}
         <rect
-          x="8"
-          y="15"
-          width={modWidth - 16}
-          height="170"
-          rx="4"
+          x="0"
+          y="0"
+          width={modWidth}
+          height="174"
           fill={isWhiteTheme ? '#ECFDF5' : '#03251E'}
           stroke={idaeGreen}
-          strokeWidth="2"
+          strokeWidth="1.8"
         />
 
         {/* CANONICAL IDAE CENTRIFUGAL SCROLL VOLUTE (VOLUTA EN CARACOL VERDE FIG. 1 PÁG. 16 & PÁG. 17) */}
@@ -1417,41 +1306,6 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
           />
           <circle cx="-5" cy="115" r="4.5" fill="#64748B" stroke="#CBD5E1" strokeWidth="1" />
         </g>
-
-        {/* Antivibration base springs */}
-        <g transform={`translate(${modWidth / 2 - 25}, 180)`}>
-          <rect x="-8" y="0" width="16" height="5" fill="#475569" rx="1" />
-          <path d="M -5 0 L -2.5 -5 L 0 0 L 2.5 -5 L 5 0" fill="none" stroke="#94A3B8" strokeWidth="1.8" />
-        </g>
-        <g transform={`translate(${modWidth / 2 + 25}, 180)`}>
-          <rect x="-8" y="0" width="16" height="5" fill="#475569" rx="1" />
-          <path d="M -5 0 L -2.5 -5 L 0 0 L 2.5 -5 L 5 0" fill="none" stroke="#94A3B8" strokeWidth="1.8" />
-        </g>
-
-        {/* Canonical IDAE Fig. 1 badge */}
-        <g transform={`translate(${modWidth / 2}, 184)`}>
-          <rect
-            x="-50"
-            y="-10"
-            width="100"
-            height="18"
-            rx="4"
-            fill={isWhiteTheme ? '#D1FAE5' : '#064E3B'}
-            stroke={idaeGreen}
-            strokeWidth="1.5"
-          />
-          <text
-            x="0"
-            y="3"
-            textAnchor="middle"
-            fill={isWhiteTheme ? '#065F46' : '#A7F3D0'}
-            fontSize="8"
-            fontWeight="bold"
-            fontFamily="JetBrains Mono"
-          >
-            Ventilador (correas)
-          </text>
-        </g>
       </g>
     );
   }
@@ -1480,124 +1334,65 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
       );
     }
 
+    // Canonical AutoCAD Ventilador.svg geometry (Círculo con triángulo equilátero inscrito en sentido del flujo)
+    const x0 = 0;
+    const y0 = 0;
+    const boxW = modWidth;
+    const boxH = 174;
+
+    const cx = x0 + boxW / 2;
+    const cy = y0 + boxH / 2; // Perfectly centered at y = 87
+    const R = Math.min(boxW * 0.44, boxH * 0.38, 56);
+
+    // Inscribed equilateral triangle vertices (pointing in the direction of airflow: left -> right)
+    const leftX = cx - R * 0.5;
+    const tipX = cx + R;
+    const topY = cy - R * (Math.sqrt(3) / 2);
+    const botY = cy + R * (Math.sqrt(3) / 2);
+
+    const cadGreen = isWhiteTheme ? '#16A34A' : '#22C55E';
+
     return (
       <g className="idae-symbol-fan">
-        {/* Fan Plenum Chamber */}
+        {/* Fan Plenum Chamber Frame */}
         <rect
-          x="8"
-          y="15"
-          width={modWidth - 16}
-          height="170"
-          rx="4"
-          fill={isWhiteTheme ? '#ECFDF5' : '#03251E'}
-          stroke={idaeGreen}
-          strokeWidth="2"
+          x={x0}
+          y={y0}
+          width={boxW}
+          height={boxH}
+          fill={isWhiteTheme ? '#F0FDF4' : '#03251E'}
+          stroke={cadGreen}
+          strokeWidth="1.8"
         />
 
-        {/* Calibrated Suction Nozzle Cone (Tobera venturi con tomas Δp) */}
-        <path
-          d="M 16 40 L 42 60 L 42 135 L 16 155 Z"
-          fill={isWhiteTheme ? '#D1FAE5' : '#064E3B'}
-          stroke="#059669"
-          strokeWidth="1.5"
+        {/* Canonical AutoCAD Outer Circle (Ventilador.svg) */}
+        <circle
+          cx={cx}
+          cy={cy}
+          r={R}
+          fill={isWhiteTheme ? '#FFFFFF' : '#073B2E'}
+          stroke={cadGreen}
+          strokeWidth="2.4"
         />
-        <circle cx="38" cy="65" r="2.5" fill="#34D399" />
-        <circle cx="38" cy="130" r="2.5" fill="#34D399" />
 
-        {/* Canonical Direct Drive Impeller (Fig. 2 Guía IDAE) */}
-        <g transform={`translate(${modWidth / 2 - 5}, 97)`}>
-          <circle
-            cx="0"
-            cy="0"
-            r="46"
-            fill={isWhiteTheme ? '#FFFFFF' : '#064E3B'}
-            stroke={idaeGreen}
-            strokeWidth="2.5"
-          />
-          <circle cx="0" cy="0" r="14" fill="#047857" stroke="#34D399" strokeWidth="2" />
+        {/* Canonical AutoCAD Inscribed Direction Triangle (Ventilador.svg) */}
+        <polygon
+          points={`${leftX},${topY} ${tipX},${cy} ${leftX},${botY}`}
+          fill={isWhiteTheme ? 'rgba(22, 163, 74, 0.15)' : 'rgba(34, 197, 94, 0.25)'}
+          stroke={cadGreen}
+          strokeWidth="2.4"
+          strokeLinejoin="round"
+        />
 
-          {[0, 60, 120, 180, 240, 300].map((deg) => (
-            <path
-              key={`blade-fan-${deg}`}
-              d="M 14 0 Q 30 -5 44 -18"
-              fill="none"
-              stroke={idaeGreen}
-              strokeWidth="3.5"
-              strokeLinecap="round"
-              transform={`rotate(${deg})`}
-            />
-          ))}
-
-          <polygon points="24,-24 22,-16 29,-18" fill="#34D399" />
-        </g>
-
-        {/* Directly Coupled Motor Body (Sin correas Fig. 2) */}
-        <g transform={`translate(${modWidth - 42}, 65)`}>
-          <rect
-            x="0"
-            y="0"
-            width="28"
-            height="65"
-            rx="3"
-            fill={isWhiteTheme ? '#E2E8F0' : '#1E293B'}
-            stroke={primaryStroke}
-            strokeWidth="1.5"
-          />
-          {[10, 20, 30, 40, 50].map((fy) => (
-            <line key={`mot-fin-${fy}`} x1="0" y1={fy} x2="28" y2={fy} stroke={gridLine} strokeWidth="1" />
-          ))}
-          <text
-            x="14"
-            y="36"
-            textAnchor="middle"
-            fill={idaeGreen}
-            fontSize="9"
-            fontWeight="bold"
-            fontFamily="JetBrains Mono"
-          >
-            EC
-          </text>
-        </g>
-
-        {/* Antivibration Canvas Flexible Sleeve on discharge */}
-        <g transform={`translate(${modWidth - 14}, 50)`}>
-          <line x1="0" y1="0" x2="0" y2="95" stroke="#F59E0B" strokeWidth="3" strokeDasharray="3,3" />
-        </g>
-
-        {/* Antivibration spring foot mounts */}
-        <g transform={`translate(${modWidth / 2 - 20}, 180)`}>
-          <rect x="-10" y="0" width="20" height="6" fill="#475569" rx="1" />
-          <path d="M -6 0 L -3 -6 L 0 0 L 3 -6 L 6 0" fill="none" stroke="#94A3B8" strokeWidth="2" />
-        </g>
-        <g transform={`translate(${modWidth / 2 + 25}, 180)`}>
-          <rect x="-10" y="0" width="20" height="6" fill="#475569" rx="1" />
-          <path d="M -6 0 L -3 -6 L 0 0 L 3 -6 L 6 0" fill="none" stroke="#94A3B8" strokeWidth="2" />
-        </g>
-
-        {/* Badge */}
-        <g transform={`translate(${modWidth / 2}, 184)`}>
-          <rect
-            x="-44"
-            y="-10"
-            width="88"
-            height="18"
-            rx="4"
-            fill={isWhiteTheme ? '#D1FAE5' : '#064E3B'}
-            stroke={idaeGreen}
-            strokeWidth="1.5"
-          />
-          <text
-            x="0"
-            y="3"
-            textAnchor="middle"
-            fill={isWhiteTheme ? '#065F46' : '#A7F3D0'}
-            fontSize="8.5"
-            fontWeight="bold"
-            fontFamily="JetBrains Mono"
-          >
-            Ventilador (directo)
-          </text>
-        </g>
+        {/* Vertical chord closing the back of the triangle */}
+        <line
+          x1={leftX}
+          y1={topY}
+          x2={leftX}
+          y2={botY}
+          stroke={cadGreen}
+          strokeWidth="2.4"
+        />
       </g>
     );
   }
@@ -1645,85 +1440,103 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
       );
     }
 
+    // Canonical AutoCAD Filtro.svg geometry (Normativa Técnica Española / ATECYR / IDAE)
+    const x0 = 0;
+    const y0 = 0;
+    const boxW = modWidth;
+    const boxH = 174;
+
+    // Vertical partition at ~28% width separating wavy stage from bag stage
+    const xDiv = x0 + boxW * 0.28;
+    const wLeft = xDiv - x0;
+    const xMid = x0 + wLeft * 0.5;
+
+    // Left section: 12 sinusoidal wavy lamellas (AutoCAD Filtro.svg)
+    const numWaves = 12;
+    const wavePitch = boxH / numWaves;
+    const waveAmp = wavePitch * 0.32;
+
+    // Right section: 6 tapered bag filter pockets with flat tips (AutoCAD Filtro.svg)
+    const wRight = x0 + boxW - xDiv;
+    const xBagEnd = xDiv + wRight * 0.88; // clearance plenum
+    const numBags = 6;
+    const bagH = boxH / numBags;
+    const tipHalfH = bagH * 0.18;
+
+    const cadMagenta = isWhiteTheme ? '#C026D3' : '#E879F9';
+
     return (
       <g className="idae-symbol-final-filter">
-        {/* Outer frame */}
+        {/* Outer AutoCAD metal casing frame */}
         <rect
-          x="8"
-          y="15"
-          width={modWidth - 16}
-          height="170"
-          rx="2"
-          fill={isWhiteTheme ? '#FDF2F8' : '#270817'}
-          stroke={idaePink}
+          x={x0}
+          y={y0}
+          width={boxW}
+          height={boxH}
+          fill={isWhiteTheme ? '#FDF4FF' : '#1A0824'}
+          stroke={cadMagenta}
           strokeWidth="1.8"
         />
 
-        {/* CANONICAL IDAE BAG FILTER: 4 TAPERED CONICAL POCKETS EXTENDING TO THE RIGHT (FIG. 1, 2, 73, 81) */}
-        <g transform="translate(14, 20)">
-          {[0, 1, 2, 3].map((pocketIdx) => {
-            const py = pocketIdx * 38 + 18;
-            const pocketLength = modWidth - 32;
+        {/* Vertical divider line */}
+        <line
+          x1={xDiv}
+          y1={y0}
+          x2={xDiv}
+          y2={y0 + boxH}
+          stroke={cadMagenta}
+          strokeWidth="1.8"
+        />
+
+        {/* LEFT SECTION: 12 Sinusoidal Wavy Lamellas (AutoCAD Filtro.svg) */}
+        <g className="filter-cad-wavy-stage">
+          {Array.from({ length: numWaves }).map((_, i) => {
+            const yBase = y0 + (i + 0.5) * wavePitch;
             return (
-              <g key={`pocket-${pocketIdx}`}>
-                {/* Tapered conical pocket extending horizontally */}
-                <path
-                  d={`M 0 ${py - 14}
-                      L ${pocketLength} ${py - 4}
-                      L ${pocketLength} ${py + 4}
-                      L 0 ${py + 14} Z`}
-                  fill={isWhiteTheme ? '#FCE7F3' : '#4A0D2A'}
-                  stroke={idaePink}
-                  strokeWidth="2.2"
-                  strokeLinejoin="round"
-                />
-                {/* Reinforcement seams and airflow channels */}
-                <line
-                  x1="4"
-                  y1={py}
-                  x2={pocketLength - 4}
-                  y2={py}
-                  stroke={idaePink}
-                  strokeWidth="1.2"
-                  strokeDasharray="3,2"
-                />
-                {/* Front pocket mouth collar */}
-                <line x1="0" y1={py - 14} x2="0" y2={py + 14} stroke={idaePink} strokeWidth="3" />
-              </g>
+              <path
+                key={`wave-${i}`}
+                d={`M ${x0} ${yBase}
+                   C ${x0 + wLeft * 0.25} ${yBase + waveAmp * 1.3}, ${xMid - wLeft * 0.25} ${yBase + waveAmp * 1.3}, ${xMid} ${yBase}
+                   C ${xMid + wLeft * 0.25} ${yBase - waveAmp * 1.3}, ${xDiv - wLeft * 0.25} ${yBase - waveAmp * 1.3}, ${xDiv} ${yBase}`}
+                fill="none"
+                stroke={cadMagenta}
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              />
+            );
+          })}
+        </g>
+
+        {/* RIGHT SECTION: 6 Tapered Bag Filter Pockets with Flat End-Caps (AutoCAD Filtro.svg) */}
+        <g className="filter-cad-bag-stage">
+          {Array.from({ length: numBags }).map((_, k) => {
+            const yInletTop = y0 + k * bagH;
+            const yInletBot = y0 + (k + 1) * bagH;
+            const yCenter = y0 + (k + 0.5) * bagH;
+            const yTipTop = yCenter - tipHalfH;
+            const yTipBot = yCenter + tipHalfH;
+
+            return (
+              <path
+                key={`cad-final-bag-${k}`}
+                d={`M ${xDiv} ${yInletTop}
+                   L ${xBagEnd} ${yTipTop}
+                   L ${xBagEnd} ${yTipBot}
+                   L ${xDiv} ${yInletBot}`}
+                fill={isWhiteTheme ? 'rgba(217, 70, 239, 0.04)' : 'rgba(217, 70, 239, 0.08)'}
+                stroke={cadMagenta}
+                strokeWidth="1.6"
+                strokeLinejoin="round"
+              />
             );
           })}
         </g>
 
         {/* Differential pressure gauge (Magnehelic ΔP) */}
         <g transform={`translate(${modWidth / 2}, 8)`}>
-          <circle cx="0" cy="0" r="9" fill={isWhiteTheme ? '#FFFFFF' : '#1E293B'} stroke={idaePink} strokeWidth="1.5" />
-          <text x="0" y="3" textAnchor="middle" fill={idaePink} fontSize="7" fontWeight="bold" fontFamily="JetBrains Mono">
+          <circle cx="0" cy="0" r="9" fill={isWhiteTheme ? '#FFFFFF' : '#1E293B'} stroke={cadMagenta} strokeWidth="1.5" />
+          <text x="0" y="3" textAnchor="middle" fill={cadMagenta} fontSize="7" fontWeight="bold" fontFamily="JetBrains Mono">
             ΔP
-          </text>
-        </g>
-
-        {/* Norm label badge according to RITE IT 1.1.4.2 */}
-        <g transform={`translate(${modWidth / 2}, 184)`}>
-          <rect
-            x="-30"
-            y="-10"
-            width="60"
-            height="18"
-            rx="4"
-            fill={isWhiteTheme ? '#FCE7F3' : '#831843'}
-            stroke={idaePink}
-            strokeWidth="1.5"
-          />
-          <text
-            x="0"
-            y="3"
-            textAnchor="middle"
-            fill={isWhiteTheme ? '#9D174D' : '#FCE7F3'}
-            fontSize="9"
-            fontWeight="bold"
-            fontFamily="JetBrains Mono"
-          >
-            Filtro {fClass}
           </text>
         </g>
       </g>
@@ -1754,91 +1567,64 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
       );
     }
 
+    // Canonical AutoCAD & Guía IDAE Pág. 17 Plenum Section (Door with two horizontal locks — — from 01.png)
+    const x0 = 0;
+    const y0 = 0;
+    const boxW = modWidth;
+    const boxH = 174;
+
+    const doorInsetX = 14;
+    const doorInsetY = 14;
+    const doorW = boxW - doorInsetX * 2;
+    const doorH = boxH - doorInsetY * 2;
+    const doorRight = x0 + doorInsetX + doorW;
+
+    const strokeColor = isWhiteTheme ? '#0F172A' : '#94A3B8';
+
     return (
       <g className="idae-symbol-plenum">
-        {/* Spacious free airflow expansion plenum (Pág. 73 Guía IDAE: Filtro F8 - Plenum - Ventilador - Prefiltro F6) */}
+        {/* Outer Plenum Casing Frame */}
         <rect
-          x="8"
-          y="15"
-          width={modWidth - 16}
-          height="170"
-          rx="4"
-          fill={isWhiteTheme ? '#F8FAFC' : '#0F172A'}
-          stroke="#94A3B8"
+          x={x0}
+          y={y0}
+          width={boxW}
+          height={boxH}
+          fill={isWhiteTheme ? '#FFFFFF' : '#0B132B'}
+          stroke={strokeColor}
           strokeWidth="1.8"
         />
 
-        {/* Sealed Inspection Access Door with heavy hinges and latch */}
-        <g transform="translate(16, 25)">
-          <rect
-            x="0"
-            y="0"
-            width={modWidth - 32}
-            height="135"
-            rx="4"
-            fill={isWhiteTheme ? '#F1F5F9' : '#1E293B'}
-            stroke="#64748B"
-            strokeWidth="1.5"
-          />
+        {/* Inner Inspection Access Door (Puerta de registro Pág. 17 IDAE) */}
+        <rect
+          x={x0 + doorInsetX}
+          y={y0 + doorInsetY}
+          width={doorW}
+          height={doorH}
+          rx="2"
+          fill={isWhiteTheme ? '#FFFFFF' : '#0F172A'}
+          stroke={strokeColor}
+          strokeWidth="2.2"
+        />
 
-          <rect x="-2" y="20" width="4" height="12" fill="#475569" rx="1" />
-          <rect x="-2" y="105" width="4" height="12" fill="#475569" rx="1" />
-
-          {/* Rotary Compression Handle */}
-          <g transform={`translate(${modWidth - 42}, 68)`}>
-            <circle cx="0" cy="0" r="4.5" fill="#94A3B8" />
-            <line x1="0" y1="0" x2="0" y2="16" stroke="#E2E8F0" strokeWidth="2.5" strokeLinecap="round" />
-          </g>
-
-          {/* Circular Inspection Porthole with double glass & reflection */}
-          <g transform={`translate(${(modWidth - 32) / 2}, 60)`}>
-            <circle cx="0" cy="0" r="18" fill={isWhiteTheme ? '#E0F2FE' : '#082F49'} stroke="#0284C7" strokeWidth="2" />
-            <circle cx="0" cy="0" r="14" fill={isWhiteTheme ? '#BAE6FD' : '#0C4A6E'} opacity="0.6" />
-            <path d="M -8 -8 L 8 8" stroke="#FFFFFF" strokeWidth="1.5" strokeLinecap="round" opacity="0.8" />
-          </g>
-
-          {/* Interior ceiling maintenance luminaire */}
-          <g transform={`translate(${(modWidth - 32) / 2}, 12)`}>
-            <rect x="-10" y="0" width="20" height="6" rx="2" fill="#FEF08A" stroke="#EAB308" strokeWidth="1" />
-            <polygon
-              points="-10,6 10,6 24,120 -24,120"
-              fill="#FEF08A"
-              fillOpacity="0.08"
-              className={isFlowActive ? 'animate-pulse' : ''}
-            />
-          </g>
-        </g>
-
-        {/* Pressure & Temperature test ports */}
-        <g transform={`translate(${modWidth / 2}, 10)`}>
-          <circle cx="-14" cy="0" r="2.5" fill="#EF4444" />
-          <circle cx="14" cy="0" r="2.5" fill="#38BDF8" />
-        </g>
-
-        {/* Canonical IDAE Plenum badge */}
-        <g transform={`translate(${modWidth / 2}, 184)`}>
-          <rect
-            x="-32"
-            y="-10"
-            width="64"
-            height="18"
-            rx="4"
-            fill={isWhiteTheme ? '#E2E8F0' : '#1E293B'}
-            stroke="#64748B"
-            strokeWidth="1.5"
-          />
-          <text
-            x="0"
-            y="3"
-            textAnchor="middle"
-            fill={isWhiteTheme ? '#1E293B' : '#F1F5F9'}
-            fontSize="9"
-            fontWeight="bold"
-            fontFamily="JetBrains Mono"
-          >
-            Plenum (0,4m)
-          </text>
-        </g>
+        {/* Double Horizontal Door Latches (Dos cierres/manetas horizontales — —) */}
+        <line
+          x1={doorRight - 20}
+          y1={y0 + doorInsetY + doorH * 0.28}
+          x2={doorRight - 6}
+          y2={y0 + doorInsetY + doorH * 0.28}
+          stroke={strokeColor}
+          strokeWidth="3.5"
+          strokeLinecap="round"
+        />
+        <line
+          x1={doorRight - 20}
+          y1={y0 + doorInsetY + doorH * 0.72}
+          x2={doorRight - 6}
+          y2={y0 + doorInsetY + doorH * 0.72}
+          stroke={strokeColor}
+          strokeWidth="3.5"
+          strokeLinecap="round"
+        />
       </g>
     );
   }
@@ -1848,10 +1634,10 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
     return (
       <g className="idae-symbol-adiabatic-cooling">
         <rect
-          x="8"
-          y="15"
-          width={modWidth - 16}
-          height="170"
+          x="6"
+          y="8"
+          width={modWidth - 12}
+          height="154"
           rx="4"
           fill={isWhiteTheme ? '#F0F9FF' : '#082F49'}
           stroke={idaeBlue}
@@ -1859,64 +1645,64 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
         />
 
         {/* Spray Manifold (Rampa de agua con toberas pulverizadoras - Pág. 79/81) */}
-        <g transform="translate(20, 25)">
-          <line x1="12" y1="0" x2="12" y2="125" stroke={idaeBlue} strokeWidth="4" strokeLinecap="round" />
-          <circle cx="12" cy="0" r="4.5" fill="#38BDF8" />
+        <g transform="translate(18, 20)">
+          <line x1="12" y1="0" x2="12" y2="105" stroke={idaeBlue} strokeWidth="3.5" strokeLinecap="round" />
+          <circle cx="12" cy="0" r="4" fill="#38BDF8" />
 
-          {[18, 50, 82, 114].map((ny) => (
+          {[12, 38, 64, 90].map((ny) => (
             <g key={`spray-nozzle-${ny}`} transform={`translate(12, ${ny})`}>
-              <rect x="-3" y="-5" width="6" height="10" rx="1" fill="#0369A1" stroke="#38BDF8" strokeWidth="1" />
+              <rect x="-3" y="-4" width="6" height="8" rx="1" fill="#0369A1" stroke="#38BDF8" strokeWidth="1" />
               <line x1="0" y1="0" x2="-8" y2="0" stroke={idaeBlue} strokeWidth="2.5" />
               <path
-                d="M -8 0 L -28 -14 L -28 14 Z"
+                d="M -8 0 L -26 -12 L -26 12 Z"
                 fill="#38BDF8"
                 fillOpacity="0.25"
                 stroke="#38BDF8"
                 strokeWidth="1"
                 strokeDasharray="2,2"
               />
-              <circle cx="-16" cy="-4" r="1.5" fill="#38BDF8" className={isFlowActive ? 'animate-ping' : ''} />
-              <circle cx="-22" cy="6" r="1.2" fill="#0EA5E9" />
-              <circle cx="-25" cy="-2" r="1.8" fill="#38BDF8" />
+              <circle cx="-14" cy="-3" r="1.5" fill="#38BDF8" className={isFlowActive ? 'animate-ping' : ''} />
+              <circle cx="-20" cy="5" r="1.2" fill="#0EA5E9" />
+              <circle cx="-22" cy="-2" r="1.5" fill="#38BDF8" />
             </g>
           ))}
         </g>
 
         {/* High-efficiency Droplet Eliminator (Separador de gotas alveolar posterior) */}
-        <g transform={`translate(${modWidth - 28}, 26)`}>
-          <rect x="0" y="0" width="14" height="135" fill={isWhiteTheme ? '#E0F2FE' : '#0C4A6E'} rx="2" stroke={idaeBlue} strokeWidth="1" />
-          {[10, 28, 46, 64, 82, 100, 118].map((ey) => (
+        <g transform={`translate(${modWidth - 26}, 20)`}>
+          <rect x="0" y="0" width="12" height="105" fill={isWhiteTheme ? '#E0F2FE' : '#0C4A6E'} rx="2" stroke={idaeBlue} strokeWidth="1" />
+          {[8, 24, 40, 56, 72, 88].map((ey) => (
             <path
               key={`adiab-elim-${ey}`}
-              d={`M 2 ${ey} L 7 ${ey + 5} L 12 ${ey}`}
+              d={`M 2 ${ey} L 6 ${ey + 4} L 10 ${ey}`}
               fill="none"
               stroke="#38BDF8"
-              strokeWidth="1.8"
+              strokeWidth="1.6"
               strokeLinecap="round"
             />
           ))}
         </g>
 
         {/* Bottom Water Collection Basin with Pump */}
-        <g transform="translate(10, 160)">
-          <rect x="0" y="0" width={modWidth - 20} height="20" rx="2" fill="#0369A1" stroke="#38BDF8" strokeWidth="1.2" />
+        <g transform="translate(8, 126)">
+          <rect x="0" y="0" width={modWidth - 16} height="15" rx="2" fill="#0369A1" stroke="#38BDF8" strokeWidth="1.2" />
           <path
-            d={`M 4 5 Q 14 2 24 5 T 44 5 T 64 5 T 84 5 T ${modWidth - 28} 5`}
+            d={`M 4 4 Q 14 2 24 4 T 44 4 T 64 4 T 84 4 T ${modWidth - 24} 4`}
             fill="none"
             stroke="#E0F2FE"
             strokeWidth="1.5"
           />
-          <circle cx="20" cy="11" r="5.5" fill="#0F172A" stroke="#38BDF8" strokeWidth="1" />
-          <text x="20" y="14" textAnchor="middle" fill="#38BDF8" fontSize="7" fontWeight="bold">P</text>
+          <circle cx="18" cy="8" r="4.5" fill="#0F172A" stroke="#38BDF8" strokeWidth="1" />
+          <text x="18" y="11" textAnchor="middle" fill="#38BDF8" fontSize="6.5" fontWeight="bold">P</text>
         </g>
 
-        {/* Canonical IDAE label */}
-        <g transform={`translate(${modWidth / 2}, 184)`}>
+        {/* Canonical IDAE label strictly inside compartment */}
+        <g transform={`translate(${modWidth / 2}, 148)`}>
           <rect
             x="-46"
-            y="-10"
+            y="-8"
             width="92"
-            height="18"
+            height="16"
             rx="4"
             fill={isWhiteTheme ? '#E0F2FE' : '#082F49'}
             stroke={idaeBlue}
@@ -1943,10 +1729,10 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
     return (
       <g className="idae-symbol-droplet-eliminator">
         <rect
-          x="8"
-          y="15"
-          width={modWidth - 16}
-          height="170"
+          x="6"
+          y="8"
+          width={modWidth - 12}
+          height="154"
           rx="3"
           fill={isWhiteTheme ? '#F0F9FF' : '#082F49'}
           stroke={idaeBlue}
@@ -1954,18 +1740,18 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
         />
 
         {/* Vertical Sinusoidal Wave Separator Louvres */}
-        <g transform="translate(16, 24)">
+        <g transform="translate(16, 20)">
           {[0, 1, 2].map((col) => {
             const cx = col * 14 + 6;
             return (
               <g key={`drop-wave-col-${col}`}>
-                {[10, 32, 54, 76, 98, 120].map((wy) => (
+                {[6, 26, 46, 66, 86, 106].map((wy) => (
                   <path
                     key={`wave-${col}-${wy}`}
-                    d={`M ${cx - 5} ${wy} Q ${cx} ${wy + 6} ${cx + 5} ${wy} Q ${cx + 10} ${wy - 6} ${cx + 15} ${wy}`}
+                    d={`M ${cx - 5} ${wy} Q ${cx} ${wy + 5} ${cx + 5} ${wy} Q ${cx + 10} ${wy - 5} ${cx + 15} ${wy}`}
                     fill="none"
                     stroke="#38BDF8"
-                    strokeWidth="2.5"
+                    strokeWidth="2.2"
                     strokeLinecap="round"
                   />
                 ))}
@@ -1975,21 +1761,21 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
         </g>
 
         {/* Catchment tray */}
-        <g transform="translate(10, 164)">
+        <g transform="translate(8, 126)">
           <polygon
-            points={`0,0 ${modWidth - 20},0 ${modWidth - 26},8 6,8`}
+            points={`0,0 ${modWidth - 16},0 ${modWidth - 22},6 6,6`}
             fill="#0369A1"
             stroke="#38BDF8"
             strokeWidth="1.2"
           />
         </g>
 
-        <g transform={`translate(${modWidth / 2}, 184)`}>
+        <g transform={`translate(${modWidth / 2}, 148)`}>
           <rect
             x="-34"
-            y="-10"
+            y="-8"
             width="68"
-            height="18"
+            height="16"
             rx="4"
             fill={isWhiteTheme ? '#E0F2FE' : '#0C4A6E'}
             stroke={idaeBlue}
@@ -2018,68 +1804,68 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
     return (
       <g className="idae-symbol-rotary-wheel">
         <rect
-          x="8"
-          y="15"
-          width={modWidth - 16}
-          height="170"
+          x="6"
+          y="8"
+          width={modWidth - 12}
+          height="154"
           rx="4"
           fill={isWhiteTheme ? '#F0FDF4' : '#042217'}
           stroke={idaeGreen}
           strokeWidth="2"
         />
 
-        <g transform={`translate(${modWidth / 2}, 95)`}>
+        <g transform={`translate(${modWidth / 2}, 78)`}>
           <circle
             cx="0"
             cy="0"
-            r="60"
+            r="48"
             fill={isWhiteTheme ? '#FFFFFF' : '#0B132B'}
             stroke={idaeGreen}
-            strokeWidth="3"
+            strokeWidth="2.5"
           />
-          <circle cx="0" cy="0" r="48" fill="none" stroke={gridLine} strokeWidth="1" strokeDasharray="3,3" />
-          <circle cx="0" cy="0" r="32" fill="none" stroke={gridLine} strokeWidth="1" strokeDasharray="2,2" />
+          <circle cx="0" cy="0" r="38" fill="none" stroke={gridLine} strokeWidth="1" strokeDasharray="3,3" />
+          <circle cx="0" cy="0" r="25" fill="none" stroke={gridLine} strokeWidth="1" strokeDasharray="2,2" />
 
           {[0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330].map((deg) => (
             <line
               key={`rotor-spoke-${deg}`}
               x1="0"
               y1="0"
-              x2={58 * Math.cos((deg * Math.PI) / 180)}
-              y2={58 * Math.sin((deg * Math.PI) / 180)}
+              x2={46 * Math.cos((deg * Math.PI) / 180)}
+              y2={46 * Math.sin((deg * Math.PI) / 180)}
               stroke={deg % 90 === 0 ? idaeGreen : gridLine}
-              strokeWidth={deg % 90 === 0 ? '2' : '1'}
+              strokeWidth={deg % 90 === 0 ? '1.8' : '0.9'}
             />
           ))}
 
-          <line x1="-60" y1="0" x2="60" y2="0" stroke="#059669" strokeWidth="2.5" />
+          <line x1="-48" y1="0" x2="48" y2="0" stroke="#059669" strokeWidth="2" />
 
           {/* Purge Sector */}
           <path
-            d="M 0 0 L 22 -56 A 60 60 0 0 1 42 -44 Z"
+            d="M 0 0 L 18 -44 A 48 48 0 0 1 34 -34 Z"
             fill="#F59E0B"
             fillOpacity={isWhiteTheme ? '0.4' : '0.35'}
             stroke="#D97706"
             strokeWidth="1.5"
           />
 
-          <circle cx="0" cy="0" r="11" fill="#047857" stroke="#34D399" strokeWidth="2" />
-          <circle cx="0" cy="0" r="4" fill="#FFFFFF" />
+          <circle cx="0" cy="0" r="9" fill="#047857" stroke="#34D399" strokeWidth="1.8" />
+          <circle cx="0" cy="0" r="3.5" fill="#FFFFFF" />
         </g>
 
         {/* Gearmotor */}
-        <g transform={`translate(${modWidth - 32}, 22)`}>
-          <rect x="0" y="0" width="20" height="26" rx="2" fill="#1E293B" stroke="#475569" strokeWidth="1.2" />
-          <circle cx="10" cy="13" r="5" fill={idaeGreen} />
-          <text x="10" y="16" textAnchor="middle" fill="#FFFFFF" fontSize="7" fontWeight="bold">M</text>
+        <g transform={`translate(${modWidth - 28}, 16)`}>
+          <rect x="0" y="0" width="18" height="22" rx="2" fill="#1E293B" stroke="#475569" strokeWidth="1.2" />
+          <circle cx="9" cy="11" r="4.5" fill={idaeGreen} />
+          <text x="9" y="14" textAnchor="middle" fill="#FFFFFF" fontSize="6.5" fontWeight="bold">M</text>
         </g>
 
-        <g transform={`translate(${modWidth / 2}, 184)`}>
+        <g transform={`translate(${modWidth / 2}, 148)`}>
           <rect
             x="-38"
-            y="-10"
+            y="-8"
             width="76"
-            height="18"
+            height="16"
             rx="4"
             fill={isWhiteTheme ? '#D1FAE5' : '#064E3B'}
             stroke={idaeGreen}
@@ -2108,10 +1894,10 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
     return (
       <g className="idae-symbol-return-fan">
         <rect
-          x="8"
-          y="15"
-          width={modWidth - 16}
-          height="170"
+          x="6"
+          y="8"
+          width={modWidth - 12}
+          height="154"
           rx="4"
           fill={isWhiteTheme ? '#FEF3C7' : '#291804'}
           stroke="#D97706"
@@ -2119,45 +1905,45 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
         />
 
         <path
-          d="M 16 45 L 40 65 L 40 130 L 16 150 Z"
+          d="M 12 32 L 32 48 L 32 108 L 12 124 Z"
           fill={isWhiteTheme ? '#FDE68A' : '#451A03'}
           stroke="#D97706"
           strokeWidth="1.5"
         />
 
-        <g transform={`translate(${modWidth / 2 - 5}, 97)`}>
-          <circle cx="0" cy="0" r="44" fill={isWhiteTheme ? '#FFFFFF' : '#451A03'} stroke="#D97706" strokeWidth="2.5" />
-          <circle cx="0" cy="0" r="14" fill="#B45309" stroke="#FBBF24" strokeWidth="2" />
+        <g transform={`translate(${modWidth / 2 - 5}, 78)`}>
+          <circle cx="0" cy="0" r="38" fill={isWhiteTheme ? '#FFFFFF' : '#451A03'} stroke="#D97706" strokeWidth="2.2" />
+          <circle cx="0" cy="0" r="12" fill="#B45309" stroke="#FBBF24" strokeWidth="1.8" />
 
           {[0, 60, 120, 180, 240, 300].map((deg) => (
             <path
               key={`ret-blade-${deg}`}
-              d="M 14 0 Q 28 -5 42 -16"
+              d="M 12 0 Q 24 -4 36 -14"
               fill="none"
               stroke="#D97706"
-              strokeWidth="3.2"
+              strokeWidth="2.8"
               strokeLinecap="round"
               transform={`rotate(${deg})`}
             />
           ))}
 
-          <polygon points="22,-22 20,-14 27,-16" fill="#FBBF24" />
+          <polygon points="18,-18 16,-12 22,-14" fill="#FBBF24" />
         </g>
 
-        <g transform={`translate(${modWidth - 42}, 65)`}>
-          <rect x="0" y="0" width="28" height="65" rx="3" fill="#1E293B" stroke="#64748B" strokeWidth="1.5" />
-          {[12, 24, 36, 48].map((fy) => (
-            <line key={`ret-mot-fin-${fy}`} x1="0" y1={fy} x2="28" y2={fy} stroke="#475569" strokeWidth="1" />
+        <g transform={`translate(${modWidth - 36}, 52)`}>
+          <rect x="0" y="0" width="24" height="52" rx="3" fill="#1E293B" stroke="#64748B" strokeWidth="1.5" />
+          {[10, 20, 30, 40].map((fy) => (
+            <line key={`ret-mot-fin-${fy}`} x1="0" y1={fy} x2="24" y2={fy} stroke="#475569" strokeWidth="1" />
           ))}
-          <text x="14" y="36" textAnchor="middle" fill="#FBBF24" fontSize="8" fontWeight="bold">ETA</text>
+          <text x="12" y="30" textAnchor="middle" fill="#FBBF24" fontSize="7.5" fontWeight="bold">ETA</text>
         </g>
 
-        <g transform={`translate(${modWidth / 2}, 184)`}>
+        <g transform={`translate(${modWidth / 2}, 148)`}>
           <rect
             x="-42"
-            y="-10"
+            y="-8"
             width="84"
-            height="18"
+            height="16"
             rx="4"
             fill={isWhiteTheme ? '#FEF3C7' : '#78350F'}
             stroke="#D97706"
@@ -2213,27 +1999,27 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
           })}
         </g>
 
-        {/* Rain Hood */}
-        <g transform={`translate(${modWidth - 16}, 15)`}>
+        {/* Rain Hood bounded within section window */}
+        <g transform={`translate(${modWidth - 14}, 10)`}>
           <path
-            d="M 0 0 L 12 -4 L 12 165 L 0 160 Z"
+            d="M 0 0 L 10 -4 L 10 148 L 0 144 Z"
             fill={isWhiteTheme ? '#F1F5F9' : '#0F172A'}
             stroke="#92400E"
             strokeWidth="1.5"
           />
-          {[20, 50, 80, 110, 140].map((ly) => (
-            <line key={`exh-louvre-${ly}`} x1="2" y1={ly} x2="10" y2={ly + 8} stroke="#B45309" strokeWidth="2.5" strokeLinecap="round" />
+          {[16, 42, 68, 94, 120].map((ly) => (
+            <line key={`exh-louvre-${ly}`} x1="2" y1={ly} x2="8" y2={ly + 8} stroke="#B45309" strokeWidth="2.2" strokeLinecap="round" />
           ))}
-          <line x1="12" y1="0" x2="12" y2="165" stroke="#92400E" strokeWidth="1" strokeDasharray="2,2" />
+          <line x1="10" y1="0" x2="10" y2="148" stroke="#92400E" strokeWidth="1" strokeDasharray="2,2" />
         </g>
 
-        <g transform={`translate(${modWidth / 2}, 184)`}>
+        <g transform={`translate(${modWidth / 2}, 144)`}>
           <rect
             x="-36"
-            y="-10"
+            y="-7"
             width="72"
-            height="18"
-            rx="4"
+            height="14"
+            rx="3.5"
             fill={isWhiteTheme ? '#FEF3C7' : '#451A03'}
             stroke="#92400E"
             strokeWidth="1.5"
@@ -2243,7 +2029,7 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
             y="3"
             textAnchor="middle"
             fill={isWhiteTheme ? '#78350F' : '#FDE68A'}
-            fontSize="8.5"
+            fontSize="8"
             fontWeight="bold"
             fontFamily="JetBrains Mono"
           >
@@ -2261,17 +2047,17 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
     return (
       <g className="idae-symbol-silencer">
         <rect
-          x="8"
-          y="15"
-          width={modWidth - 16}
-          height="170"
+          x="6"
+          y="8"
+          width={modWidth - 12}
+          height="154"
           rx="3"
           fill={isWhiteTheme ? '#F8FAFC' : '#0F172A'}
           stroke="#64748B"
           strokeWidth="1.5"
         />
 
-        {[22, 60, 98, 136].map((sy) => (
+        {[14, 44, 74, 104].map((sy) => (
           <g key={`baffle-${sy}`} transform={`translate(14, ${sy})`}>
             <path
               d={`M 8 0
@@ -2297,13 +2083,13 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
           </g>
         ))}
 
-        <g transform={`translate(${modWidth / 2}, 184)`}>
+        <g transform={`translate(${modWidth / 2}, 144)`}>
           <rect
             x="-28"
-            y="-10"
+            y="-7"
             width="56"
-            height="18"
-            rx="4"
+            height="14"
+            rx="3.5"
             fill={isWhiteTheme ? '#F1F5F9' : '#1E293B'}
             stroke="#64748B"
             strokeWidth="1.5"
@@ -2313,7 +2099,7 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
             y="3"
             textAnchor="middle"
             fill={isWhiteTheme ? '#334155' : '#E2E8F0'}
-            fontSize="9"
+            fontSize="8.5"
             fontWeight="bold"
             fontFamily="JetBrains Mono"
           >
@@ -2328,10 +2114,10 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
   if (mod.type === 'humidifier') {
     return (
       <g className="idae-symbol-humidifier">
-        <g transform="translate(14, 25)">
-          <line x1={modWidth / 2 - 25} y1="0" x2={modWidth / 2 - 25} y2="135" stroke="#A855F7" strokeWidth="4" />
+        <g transform="translate(14, 18)">
+          <line x1={modWidth / 2 - 25} y1="0" x2={modWidth / 2 - 25} y2="120" stroke="#A855F7" strokeWidth="4" />
 
-          {[20, 45, 70, 95, 120].map((ny) => (
+          {[15, 38, 62, 85, 108].map((ny) => (
             <g key={`lance-nozzle-${ny}`} transform={`translate(${modWidth / 2 - 25}, ${ny})`}>
               <line x1="0" y1="0" x2="-8" y2="0" stroke="#C084FC" strokeWidth="2.5" />
               <path
@@ -2344,32 +2130,33 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
           ))}
 
           <g transform={`translate(${modWidth - 38}, 0)`}>
-            {[15, 40, 65, 90, 115].map((dy) => (
+            {[10, 32, 54, 76, 98].map((dy) => (
               <path
                 key={`hum-eliminator-${dy}`}
-                d={`M 0 ${dy} L 5 ${dy + 6} L 0 ${dy + 12}`}
+                d={`M 0 ${dy} L 5 ${dy + 5} L 0 ${dy + 10}`}
                 fill="none"
                 stroke="#A855F7"
-                strokeWidth="2.5"
+                strokeWidth="2.2"
               />
             ))}
           </g>
         </g>
 
-        <g transform={`translate(${modWidth / 2 - 11}, 10)`}>
+        <g transform={`translate(${modWidth / 2 - 11}, 8)`}>
           <circle cx="0" cy="0" r="5" fill="#9333EA" />
           <text x="0" y="2" textAnchor="middle" fill="#FFFFFF" fontSize="6" fontWeight="bold">
             M
           </text>
         </g>
 
-        <g transform={`translate(${modWidth / 2}, 184)`}>
+        {/* Humidifier badge safely framed inside the 170px casing */}
+        <g transform={`translate(${modWidth / 2}, 144)`}>
           <rect
             x="-26"
-            y="-10"
+            y="-7"
             width="52"
-            height="18"
-            rx="4"
+            height="14"
+            rx="3.5"
             fill={isWhiteTheme ? '#F3E8FF' : '#581C87'}
             stroke="#A855F7"
             strokeWidth="1.5"
@@ -2379,7 +2166,7 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
             y="3"
             textAnchor="middle"
             fill={isWhiteTheme ? '#6B21A8' : '#F3E8FF'}
-            fontSize="9"
+            fontSize="8"
             fontWeight="bold"
             fontFamily="JetBrains Mono"
           >

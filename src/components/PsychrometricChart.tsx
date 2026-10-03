@@ -61,6 +61,82 @@ interface PsychrometricChartProps {
   layers: ChartLayerVisibility;
 }
 
+// Geometric helpers for anti-collision label layout
+function segmentIntersectsRect(
+  x1: number, y1: number, x2: number, y2: number,
+  rx: number, ry: number, rw: number, rh: number
+): boolean {
+  if (x1 >= rx && x1 <= rx + rw && y1 >= ry && y1 <= ry + rh) return true;
+  if (x2 >= rx && x2 <= rx + rw && y2 >= ry && y2 <= ry + rh) return true;
+
+  function lineIntersects(ax: number, ay: number, bx: number, by: number, cx: number, cy: number, dx: number, dy: number): boolean {
+    const denom = (by - ay) * (dx - cx) - (bx - ax) * (dy - cy);
+    if (denom === 0) return false;
+    const ua = ((bx - ax) * (cy - ay) - (by - ay) * (cx - ax)) / denom;
+    const ub = ((dx - cx) * (cy - ay) - (dy - cy) * (cx - ax)) / denom;
+    return ua >= 0 && ua <= 1 && ub >= 0 && ub <= 1;
+  }
+
+  return (
+    lineIntersects(x1, y1, x2, y2, rx, ry, rx + rw, ry) ||
+    lineIntersects(x1, y1, x2, y2, rx + rw, ry, rx + rw, ry + rh) ||
+    lineIntersects(x1, y1, x2, y2, rx + rw, ry + rh, rx, ry + rh) ||
+    lineIntersects(x1, y1, x2, y2, rx, ry + rh, rx, ry)
+  );
+}
+
+function rectOverlapArea(
+  r1x: number, r1y: number, r1w: number, r1h: number,
+  r2x: number, r2y: number, r2w: number, r2h: number
+): number {
+  const overlapX = Math.max(0, Math.min(r1x + r1w, r2x + r2w) - Math.max(r1x, r2x));
+  const overlapY = Math.max(0, Math.min(r1y + r1h, r2y + r2h) - Math.max(r1y, r2y));
+  return overlapX * overlapY;
+}
+
+function pointNearRect(px: number, py: number, rx: number, ry: number, rw: number, rh: number, pad = 8): boolean {
+  return px >= rx - pad && px <= rx + rw + pad && py >= ry - pad && py <= ry + rh + pad;
+}
+
+function distanceToSegment(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return Math.hypot(px - x1, py - y1);
+  const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lenSq));
+  const projX = x1 + t * dx;
+  const projY = y1 + t * dy;
+  return Math.hypot(px - projX, py - projY);
+}
+
+interface PlacedPointLabel {
+  pointId: string;
+  boxX: number;
+  boxY: number;
+  width: number;
+  height: number;
+  lineStartX: number;
+  lineStartY: number;
+  lineEndX: number;
+  lineEndY: number;
+  hasLeader: boolean;
+}
+
+interface PlacedProcessLabel {
+  processId: string;
+  boxX: number;
+  boxY: number;
+  width: number;
+  height: number;
+  cx: number;
+  cy: number;
+  hasLeader: boolean;
+  leaderStartX: number;
+  leaderStartY: number;
+  leaderEndX: number;
+  leaderEndY: number;
+}
+
 // Standard full psychrometric domain limits
 const DEFAULT_BOUNDS: ChartBounds = {
   tdbMin: -10,
@@ -87,28 +163,28 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
   const viewBoxWidth = 1200;
   const viewBoxHeight = 740;
 
-  // Optimized margins giving clean clearance for official ASHRAE outer enthalpy scale and FCS scale
-  const margin = useMemo(
-    () => ({
-      top: 36,    // Clearance for top perimeter enthalpy scale
-      right: 80,  // Space for Humidity Ratio scale W and Sensible Heat Factor scale
-      bottom: 46, // Space for Dry Bulb Temp scale Tbs and tick numbers
-      left: 52,   // Space for -10 tick and outer saturation enthalpy scale
-    }),
-    []
-  );
-
-  const plotWidth = viewBoxWidth - margin.left - margin.right;
-  const plotHeight = viewBoxHeight - margin.top - margin.bottom;
-
-  // Active visible domain bounds (Zoom and Pan apply directly to the diagram coordinates, not the outer window)
-  const [bounds, setBounds] = useState<ChartBounds>(DEFAULT_BOUNDS);
-
   // Official Chart Theme: 'ashrae_classic' (Canonical Green on technical paper), 'valcon_color' (Polychrome), or 'dark_blueprint' (CAD)
   const [chartTheme, setChartTheme] = useState<'ashrae_classic' | 'valcon_color' | 'dark_blueprint'>('ashrae_classic');
   const [showProtractor, setShowProtractor] = useState<boolean>(true);
   const [showEnthalpyDeviations, setShowEnthalpyDeviations] = useState<boolean>(true);
   const [selectedSHR, setSelectedSHR] = useState<number | null>(null);
+
+  // Active visible domain bounds (Zoom and Pan apply directly to the diagram coordinates, not the outer window)
+  const [bounds, setBounds] = useState<ChartBounds>(DEFAULT_BOUNDS);
+
+  // Optimized margins giving clean clearance for official ASHRAE outer enthalpy scale and FCS scale
+  const margin = useMemo(
+    () => ({
+      top: 36,    // Clearance for top perimeter enthalpy scale
+      right: showProtractor && chartType === 'carrier' ? 142 : 72, // Generous clearance strictly separating W and FCS/SHR scales
+      bottom: 46, // Space for Dry Bulb Temp scale Tbs and tick numbers
+      left: 52,   // Space for -10 tick and outer saturation enthalpy scale
+    }),
+    [showProtractor, chartType]
+  );
+
+  const plotWidth = viewBoxWidth - margin.left - margin.right;
+  const plotHeight = viewBoxHeight - margin.top - margin.bottom;
 
   // Pan & Drag state
   const [isPanning, setIsPanning] = useState(false);
@@ -424,6 +500,107 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
   const handleMouseUp = () => {
     setIsPanning(false);
     setDraggedPointId(null);
+  };
+
+  // Touch gesture support: 1-finger pan and 2-finger pinch-to-zoom
+  const chartTouchStartRef = useRef<{
+    touches: { x: number; y: number }[];
+    distance: number;
+    bounds: { tdbMin: number; tdbMax: number; wMin: number; wMax: number };
+  }>({
+    touches: [],
+    distance: 0,
+    bounds: { ...bounds },
+  });
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if ((e.target as HTMLElement).closest('button')) return;
+
+    if (e.touches.length === 1) {
+      const t = e.touches[0];
+      setIsPanning(true);
+      chartTouchStartRef.current = {
+        touches: [{ x: t.clientX, y: t.clientY }],
+        distance: 0,
+        bounds: { ...bounds },
+      };
+    } else if (e.touches.length === 2) {
+      const t0 = e.touches[0];
+      const t1 = e.touches[1];
+      const dist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+      chartTouchStartRef.current = {
+        touches: [
+          { x: t0.clientX, y: t0.clientY },
+          { x: t1.clientX, y: t1.clientY },
+        ],
+        distance: dist > 0 ? dist : 1,
+        bounds: { ...bounds },
+      };
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (!svgRef.current) return;
+
+    if (e.touches.length === 1 && isPanning) {
+      const t = e.touches[0];
+      const rect = svgRef.current.getBoundingClientRect();
+      const scale = Math.min(rect.width / viewBoxWidth, rect.height / viewBoxHeight);
+      const plotPixelWidth = Math.max(10, plotWidth * scale);
+      const plotPixelHeight = Math.max(10, plotHeight * scale);
+
+      const dx = t.clientX - chartTouchStartRef.current.touches[0].x;
+      const dy = t.clientY - chartTouchStartRef.current.touches[0].y;
+
+      const spanT = chartTouchStartRef.current.bounds.tdbMax - chartTouchStartRef.current.bounds.tdbMin;
+      const spanW = chartTouchStartRef.current.bounds.wMax - chartTouchStartRef.current.bounds.wMin;
+
+      const deltaT = -(dx / plotPixelWidth) * spanT;
+      const deltaW = (dy / plotPixelHeight) * spanW;
+
+      setBounds({
+        tdbMin: Number((chartTouchStartRef.current.bounds.tdbMin + deltaT).toFixed(2)),
+        tdbMax: Number((chartTouchStartRef.current.bounds.tdbMax + deltaT).toFixed(2)),
+        wMin: Number(Math.max(0, chartTouchStartRef.current.bounds.wMin + deltaW).toFixed(5)),
+        wMax: Number((chartTouchStartRef.current.bounds.wMax + deltaW).toFixed(5)),
+      });
+    } else if (e.touches.length === 2 && chartTouchStartRef.current.distance > 0) {
+      const t0 = e.touches[0];
+      const t1 = e.touches[1];
+      const currentDist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+      const scaleFactor = chartTouchStartRef.current.distance / Math.max(10, currentDist);
+
+      const initBounds = chartTouchStartRef.current.bounds;
+      const spanT = initBounds.tdbMax - initBounds.tdbMin;
+      const spanW = initBounds.wMax - initBounds.wMin;
+
+      const midT = (initBounds.tdbMin + initBounds.tdbMax) / 2;
+      const midW = (initBounds.wMin + initBounds.wMax) / 2;
+
+      const newSpanT = Math.min(90, Math.max(6, spanT * scaleFactor));
+      const newSpanW = Math.min(0.05, Math.max(0.002, spanW * scaleFactor));
+
+      setBounds({
+        tdbMin: Number((midT - newSpanT / 2).toFixed(2)),
+        tdbMax: Number((midT + newSpanT / 2).toFixed(2)),
+        wMin: Number(Math.max(0, midW - newSpanW / 2).toFixed(5)),
+        wMax: Number((midW + newSpanW / 2).toFixed(5)),
+      });
+    }
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    if (e.touches.length === 0) {
+      setIsPanning(false);
+      setDraggedPointId(null);
+    } else if (e.touches.length === 1) {
+      const t = e.touches[0];
+      chartTouchStartRef.current = {
+        touches: [{ x: t.clientX, y: t.clientY }],
+        distance: 0,
+        bounds: { ...bounds },
+      };
+    }
   };
 
   const handleSvgClick = (e: React.MouseEvent) => {
@@ -780,6 +957,345 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
     });
   }, [bounds.tdbMax, coordToPixel, margin.top, plotHeight, pressure]);
 
+  // Deduplicate points: remove duplicate IDs or coincident points with identical name/coords
+  const deduplicatedPoints = useMemo(() => {
+    const seenIds = new Set<string>();
+    const seenKeys = new Set<string>();
+    return points.filter((pt) => {
+      if (seenIds.has(pt.id)) return false;
+      const key = `${pt.name}_${pt.tdb.toFixed(2)}_${pt.w.toFixed(5)}`;
+      if (seenKeys.has(key)) return false;
+      seenIds.add(pt.id);
+      seenKeys.add(key);
+      return true;
+    });
+  }, [points]);
+
+  // Pixel coordinates and metadata for all active points
+  const pointPixels = useMemo(() => {
+    return deduplicatedPoints.map((pt) => {
+      const [px, py] = coordToPixel(pt.tdb, pt.w);
+      return { id: pt.id, px, py, point: pt };
+    });
+  }, [deduplicatedPoints, coordToPixel]);
+
+  // Process line segments in pixel coordinates
+  const processSegments = useMemo(() => {
+    return processes
+      .map((proc) => {
+        const from = points.find((p) => p.id === proc.fromPointId);
+        const to = points.find((p) => p.id === proc.toPointId);
+        if (!from || !to) return null;
+        const [x1, y1] = coordToPixel(from.tdb, from.w);
+        const [x2, y2] = coordToPixel(to.tdb, to.w);
+        return { id: proc.id, proc, x1, y1, x2, y2 };
+      })
+      .filter((s): s is { id: string; proc: ProcessConnection; x1: number; y1: number; x2: number; y2: number } => s !== null);
+  }, [processes, points, coordToPixel]);
+
+  // Intelligent Collision-Free Layout Engine for Points and Processes Labels
+  const labelLayout = useMemo(() => {
+    const minPlotX = margin.left + 8;
+    const maxPlotX = margin.left + plotWidth - 8;
+    const minPlotY = margin.top + 8;
+    const maxPlotY = margin.top + plotHeight - 8;
+
+    // Precompute pixel positions of points
+    const pointPixels = new Map<string, [number, number]>();
+    points.forEach((pt) => {
+      pointPixels.set(pt.id, coordToPixel(pt.tdb, pt.w));
+    });
+
+    // Precompute line segments for all visible processes
+    const procSegments: Array<{
+      id: string;
+      x1: number;
+      y1: number;
+      x2: number;
+      y2: number;
+      midX: number;
+      midY: number;
+      nx: number;
+      ny: number;
+      len: number;
+    }> = [];
+
+    processes.forEach((proc) => {
+      const p1 = pointPixels.get(proc.fromPointId);
+      const p2 = pointPixels.get(proc.toPointId);
+      if (!p1 || !p2) return;
+      const dx = p2[0] - p1[0];
+      const dy = p2[1] - p1[1];
+      const len = Math.hypot(dx, dy);
+      const nx = len > 0 ? -dy / len : 0;
+      const ny = len > 0 ? dx / len : 0;
+      procSegments.push({
+        id: proc.id,
+        x1: p1[0],
+        y1: p1[1],
+        x2: p2[0],
+        y2: p2[1],
+        midX: (p1[0] + p2[0]) / 2,
+        midY: (p1[1] + p2[1]) / 2,
+        nx,
+        ny,
+        len,
+      });
+    });
+
+    // 1. PLACE PROCESS POWER BADGES (offset perpendicularly so they NEVER sit on top of process lines or points)
+    const placedProcessLabels: PlacedProcessLabel[] = [];
+    const occupiedRects: Array<{ x: number; y: number; w: number; h: number }> = [];
+
+    procSegments.forEach((seg) => {
+      const width = 64;
+      const height = 18;
+
+      const candidates: Array<{
+        boxX: number;
+        boxY: number;
+        cx: number;
+        cy: number;
+        cost: number;
+        hasLeader: boolean;
+        dist: number;
+      }> = [];
+
+      const normalDistances = [18, -18, 28, -28, 38, -38];
+      const tRatios = [0.5, 0.4, 0.6];
+
+      for (const t of tRatios) {
+        const baseX = seg.x1 + t * (seg.x2 - seg.x1);
+        const baseY = seg.y1 + t * (seg.y2 - seg.y1);
+
+        for (const dist of normalDistances) {
+          const cx = baseX + dist * seg.nx;
+          const cy = baseY + dist * seg.ny;
+          const boxX = cx - width / 2;
+          const boxY = cy - height / 2;
+
+          let cost = Math.abs(dist) * 2;
+
+          // Boundary check
+          if (boxX < minPlotX || boxX + width > maxPlotX || boxY < minPlotY || boxY + height > maxPlotY) {
+            cost += 1000000;
+          }
+
+          // Must NOT intersect ANY process line
+          for (const s of procSegments) {
+            if (segmentIntersectsRect(s.x1, s.y1, s.x2, s.y2, boxX, boxY, width, height)) {
+              cost += 200000;
+            }
+          }
+
+          // Must NOT overlap any state point
+          for (const [, [px, py]] of pointPixels) {
+            if (pointNearRect(px, py, boxX, boxY, width, height, 12)) {
+              cost += 500000;
+            }
+          }
+
+          // Must NOT overlap already placed process badges
+          for (const occ of occupiedRects) {
+            const overlap = rectOverlapArea(boxX, boxY, width, height, occ.x, occ.y, occ.w, occ.h);
+            if (overlap > 0) {
+              cost += 1000000 + overlap * 50;
+            }
+          }
+
+          candidates.push({
+            boxX,
+            boxY,
+            cx,
+            cy,
+            cost,
+            hasLeader: Math.abs(dist) > 22,
+            dist,
+          });
+        }
+      }
+
+      // Pick candidate with minimum cost
+      candidates.sort((a, b) => a.cost - b.cost);
+      const best = candidates[0] || {
+        boxX: seg.midX - width / 2,
+        boxY: seg.midY - height / 2,
+        cx: seg.midX,
+        cy: seg.midY,
+        cost: 0,
+        hasLeader: false,
+        dist: 0,
+      };
+
+      occupiedRects.push({ x: best.boxX, y: best.boxY, w: width, h: height });
+
+      placedProcessLabels.push({
+        processId: seg.id,
+        boxX: best.boxX,
+        boxY: best.boxY,
+        width,
+        height,
+        cx: best.cx,
+        cy: best.cy,
+        hasLeader: best.hasLeader,
+        leaderStartX: seg.midX,
+        leaderStartY: seg.midY,
+        leaderEndX: best.cx,
+        leaderEndY: best.dist > 0 ? best.boxY : best.boxY + height,
+      });
+    });
+
+    // 2. PLACE STATE POINT LABELS (Anti-overlap & anti-line collision)
+    const placedPointLabels: PlacedPointLabel[] = [];
+
+    points.forEach((pt) => {
+      const p = pointPixels.get(pt.id);
+      if (!p) return;
+      const [px, py] = p;
+
+      const width = Math.max(48, pt.name.length * 7.5 + 18);
+      const height = 20;
+
+      // 8 radial directions (angles in radians)
+      const angles = [
+        -Math.PI / 4,       // Top-Right (preferred default)
+        -3 * Math.PI / 4,   // Top-Left
+        -Math.PI / 2,       // Top
+        Math.PI / 4,        // Bottom-Right
+        3 * Math.PI / 4,    // Bottom-Left
+        0,                  // Right
+        Math.PI / 2,        // Bottom
+        Math.PI,            // Left
+      ];
+
+      // Radial distances from point
+      const distances = [22, 34, 48, 64, 80];
+
+      const candidates: Array<{
+        boxX: number;
+        boxY: number;
+        cx: number;
+        cy: number;
+        cost: number;
+        dist: number;
+      }> = [];
+
+      for (const dist of distances) {
+        for (const angle of angles) {
+          const cx = px + dist * Math.cos(angle);
+          const cy = py + dist * Math.sin(angle);
+          const boxX = cx - width / 2;
+          const boxY = cy - height / 2;
+
+          let cost = dist * 2; // small penalty for larger distance
+
+          // Preference for Top-Right or Top
+          if (angle === -Math.PI / 4) cost -= 15;
+          if (angle === -Math.PI / 2) cost -= 10;
+
+          // Boundary penalty
+          if (boxX < minPlotX) cost += 1000000 + (minPlotX - boxX) * 1000;
+          if (boxX + width > maxPlotX) cost += 1000000 + (boxX + width - maxPlotX) * 1000;
+          if (boxY < minPlotY) cost += 1000000 + (minPlotY - boxY) * 1000;
+          if (boxY + height > maxPlotY) cost += 1000000 + (boxY + height - maxPlotY) * 1000;
+
+          // Must NOT overlap any state point circle
+          for (const [otherId, [otherPx, otherPy]] of pointPixels) {
+            if (otherId === pt.id) {
+              if (pointNearRect(otherPx, otherPy, boxX, boxY, width, height, 6)) {
+                cost += 300000;
+              }
+            } else {
+              if (pointNearRect(otherPx, otherPy, boxX, boxY, width, height, 14)) {
+                cost += 1000000;
+              }
+            }
+          }
+
+          // Must NOT intersect ANY process transformation line
+          for (const s of procSegments) {
+            if (segmentIntersectsRect(s.x1, s.y1, s.x2, s.y2, boxX, boxY, width, height)) {
+              cost += 500000;
+            } else {
+              const dToLine = distanceToSegment(cx, cy, s.x1, s.y1, s.x2, s.y2);
+              if (dToLine < height / 2 + 6) {
+                cost += 100000;
+              }
+            }
+          }
+
+          // Must NOT overlap ANY occupied label rectangle (point labels or process badges)
+          for (const occ of occupiedRects) {
+            const overlap = rectOverlapArea(boxX, boxY, width, height, occ.x, occ.y, occ.w, occ.h);
+            if (overlap > 0) {
+              cost += 1000000 + overlap * 50;
+            }
+          }
+
+          // Leader line should avoid crossing other state points
+          const leaderEndX = Math.max(boxX, Math.min(boxX + width, px));
+          const leaderEndY = Math.max(boxY, Math.min(boxY + height, py));
+          for (const [otherId, [otherPx, otherPy]] of pointPixels) {
+            if (otherId !== pt.id) {
+              const d = distanceToSegment(otherPx, otherPy, px, py, leaderEndX, leaderEndY);
+              if (d < 12) cost += 100000;
+            }
+          }
+
+          candidates.push({
+            boxX,
+            boxY,
+            cx,
+            cy,
+            cost,
+            dist,
+          });
+        }
+      }
+
+      // Pick candidate with minimum cost
+      candidates.sort((a, b) => a.cost - b.cost);
+      const best = candidates[0] || {
+        boxX: px + 12,
+        boxY: py - 12 - height,
+        cx: px + 12 + width / 2,
+        cy: py - 12 - height / 2,
+        cost: 0,
+        dist: 22,
+      };
+
+      occupiedRects.push({ x: best.boxX, y: best.boxY, w: width, h: height });
+
+      // Leader line coordinates
+      const dx = best.cx - px;
+      const dy = best.cy - py;
+      const dLen = Math.hypot(dx, dy) || 1;
+      const lineStartX = px + (dx / dLen) * 8;
+      const lineStartY = py + (dy / dLen) * 8;
+      const lineEndX = Math.max(best.boxX, Math.min(best.boxX + width, px));
+      const lineEndY = Math.max(best.boxY, Math.min(best.boxY + height, py));
+      const hasLeader = best.dist > 18;
+
+      placedPointLabels.push({
+        pointId: pt.id,
+        boxX: best.boxX,
+        boxY: best.boxY,
+        width,
+        height,
+        lineStartX,
+        lineStartY,
+        lineEndX,
+        lineEndY,
+        hasLeader,
+      });
+    });
+
+    return {
+      placedPointLabels,
+      placedProcessLabels,
+    };
+  }, [points, processes, coordToPixel, plotWidth, plotHeight, margin]);
+
   return (
     <div
       className="relative w-full h-full flex flex-col select-none overflow-hidden rounded-xl border transition-colors"
@@ -995,14 +1511,19 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
       <svg
         ref={svgRef}
         viewBox={`0 0 ${viewBoxWidth} ${viewBoxHeight}`}
-        className={`w-full h-full ${isPanning ? 'cursor-grabbing' : 'cursor-crosshair'}`}
+        className={`w-full h-full touch-none select-none ${isPanning ? 'cursor-grabbing' : 'cursor-crosshair'}`}
         preserveAspectRatio="xMidYMid meet"
         onWheel={handleWheel}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        onTouchCancel={handleTouchEnd}
         onClick={handleSvgClick}
         onDoubleClick={handleZoomAll}
+        style={{ touchAction: 'none' }}
       >
         <defs>
           {/* Strict plot area clipPath to guarantee zero line leaks outside plot frame */}
@@ -1269,11 +1790,11 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
                 const [x2, y2] = coordToPixel(ptTo.tdb, ptTo.w);
 
                 const procColor = proc.color || (themeStyles.isDark ? '#38BDF8' : '#0284C7');
-                const midX = (x1 + x2) / 2;
-                const midY = (y1 + y2) / 2;
+                const placedBadge = labelLayout.placedProcessLabels.find((l) => l.processId === proc.id);
 
                 return (
                   <g key={proc.id}>
+                    {/* Process Line */}
                     <line
                       x1={x1}
                       y1={y1}
@@ -1284,30 +1805,49 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
                       strokeDasharray={proc.type === 'zone_load' ? '6,3' : undefined}
                       markerEnd={proc.type === 'mixing' ? 'url(#process-arrow-amber)' : 'url(#process-arrow)'}
                     />
-                    <g transform={`translate(${midX}, ${midY})`}>
-                      <rect
-                        x="-30"
-                        y="-10"
-                        width="60"
-                        height="18"
-                        rx="4"
-                        fill={themeStyles.plotBg}
+
+                    {/* Anti-collision Leader Line (if badge is offset from line) */}
+                    {placedBadge && placedBadge.hasLeader && (
+                      <line
+                        x1={placedBadge.leaderStartX}
+                        y1={placedBadge.leaderStartY}
+                        x2={placedBadge.leaderEndX}
+                        y2={placedBadge.leaderEndY}
                         stroke={procColor}
                         strokeWidth="1"
-                        opacity="0.92"
+                        strokeDasharray="2,2"
+                        opacity="0.65"
                       />
-                      <text
-                        x="0"
-                        y="2"
-                        textAnchor="middle"
-                        fill={themeStyles.axisText}
-                        fontSize="9"
-                        fontWeight="600"
-                        fontFamily="Plus Jakarta Sans, sans-serif"
-                      >
-                        {proc.qTotal.toFixed(1)} kW
-                      </text>
-                    </g>
+                    )}
+
+                    {/* Anti-Collision Process Power Badge (Never overlaps lines or points) */}
+                    {placedBadge && (
+                      <g transform={`translate(${placedBadge.cx}, ${placedBadge.cy})`}>
+                        <rect
+                          x={-placedBadge.width / 2}
+                          y={-placedBadge.height / 2}
+                          width={placedBadge.width}
+                          height={placedBadge.height}
+                          rx="4"
+                          fill={themeStyles.plotBg}
+                          stroke={procColor}
+                          strokeWidth="1.2"
+                          opacity="0.96"
+                          filter={themeStyles.isDark ? 'drop-shadow(0 2px 4px rgba(0,0,0,0.6))' : 'drop-shadow(0 1px 3px rgba(0,0,0,0.15))'}
+                        />
+                        <text
+                          x="0"
+                          y="2.5"
+                          textAnchor="middle"
+                          fill={themeStyles.axisText}
+                          fontSize="9"
+                          fontWeight="700"
+                          fontFamily="Plus Jakarta Sans, sans-serif"
+                        >
+                          {proc.qTotal.toFixed(1)} kW
+                        </text>
+                      </g>
+                    )}
                   </g>
                 );
               })}
@@ -1316,6 +1856,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
 
           {/* Interactive State Points */}
           <g className="state-points-layer">
+            {/* 1. Point markers and selection halos */}
             {points.map((pt) => {
               const [px, py] = coordToPixel(pt.tdb, pt.w);
               const isSelected = pt.id === selectedPointId;
@@ -1353,67 +1894,101 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
                     strokeWidth={isSelected ? '3' : '2'}
                   />
                   <circle r="4" fill={pt.color} />
+                </g>
+              );
+            })}
 
-                  {layers.pointLabels && (
-                    <g transform="translate(12, -12)">
+            {/* 2. Anti-collision Point Labels and Leaders (Never overlap each other, lines, or points) */}
+            {layers.pointLabels &&
+              labelLayout.placedPointLabels.map((lbl) => {
+                const pt = points.find((p) => p.id === lbl.pointId);
+                if (!pt) return null;
+                const isSelected = pt.id === selectedPointId;
+
+                return (
+                  <g
+                    key={`lbl-${pt.id}`}
+                    className="cursor-pointer group"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onSelectPoint(pt.id);
+                    }}
+                  >
+                    {/* Leader Line linking Point Circle to Label Badge */}
+                    {lbl.hasLeader && (
+                      <line
+                        x1={lbl.lineStartX}
+                        y1={lbl.lineStartY}
+                        x2={lbl.lineEndX}
+                        y2={lbl.lineEndY}
+                        stroke={pt.color}
+                        strokeWidth="1.2"
+                        strokeDasharray="2,2"
+                        opacity="0.85"
+                      />
+                    )}
+
+                    {/* Non-overlapping Label Badge */}
+                    <g transform={`translate(${lbl.boxX}, ${lbl.boxY})`}>
                       <rect
                         x="0"
-                        y="-12"
-                        width={pt.name.length * 7 + 16}
-                        height="20"
+                        y="0"
+                        width={lbl.width}
+                        height={lbl.height}
                         rx="4"
-                        fill={themeStyles.isDark ? 'rgba(15, 23, 42, 0.92)' : 'rgba(255, 255, 255, 0.95)'}
+                        fill={themeStyles.isDark ? 'rgba(15, 23, 42, 0.94)' : 'rgba(255, 255, 255, 0.97)'}
                         stroke={isSelected ? pt.color : themeStyles.frameStroke}
-                        strokeWidth="1"
+                        strokeWidth={isSelected ? '2' : '1.2'}
+                        filter={themeStyles.isDark ? 'drop-shadow(0 2px 4px rgba(0,0,0,0.7))' : 'drop-shadow(0 1px 3px rgba(0,0,0,0.12))'}
                       />
+                      <circle cx="8" cy={lbl.height / 2} r="3" fill={pt.color} />
                       <text
-                        x="8"
-                        y="2"
+                        x="16"
+                        y={lbl.height / 2 + 3.5}
                         fill={themeStyles.isDark ? '#F8FAFC' : '#0F172A'}
-                        fontSize="10"
+                        fontSize="9.5"
                         fontWeight="bold"
                         fontFamily="Plus Jakarta Sans, sans-serif"
                       >
                         {pt.name}
                       </text>
                     </g>
-                  )}
-                </g>
-              );
-            })}
+                  </g>
+                );
+              })}
           </g>
 
           {/* Official ASHRAE / Valcon Title Block inside plot in upper left */}
           {(chartTheme === 'ashrae_classic' || chartTheme === 'valcon_color') && (
-            <g className="official-title-block pointer-events-none" transform={`translate(${margin.left + 16}, ${margin.top + 18})`}>
+            <g className="official-title-block pointer-events-none" transform={`translate(${margin.left + 16}, ${margin.top + 14})`}>
               <rect
                 x="0"
                 y="0"
-                width="230"
-                height="50"
+                width="220"
+                height="46"
                 rx="4"
                 fill={themeStyles.canvasBg}
                 stroke={themeStyles.frameStroke}
                 strokeWidth="1"
-                opacity="0.92"
+                opacity="0.94"
               />
-              <text x="12" y="15" fill={themeStyles.titleColor} fontSize="10.5" fontWeight="bold" fontFamily="Roboto Condensed, sans-serif" letterSpacing="0.4">
+              <text x="12" y="14" fill={themeStyles.titleColor} fontSize="10" fontWeight="bold" fontFamily="Roboto Condensed, sans-serif" letterSpacing="0.4">
                 ASHRAE PSYCHROMETRIC CHART NO. 1
               </text>
-              <text x="12" y="27" fill={themeStyles.axisText} fontSize="8" fontWeight="600" fontFamily="Roboto Condensed, sans-serif">
+              <text x="12" y="26" fill={themeStyles.axisText} fontSize="7.8" fontWeight="600" fontFamily="Roboto Condensed, sans-serif">
                 NORMAL TEMPERATURE · SI UNITS · 101.325 kPa (NIVEL DEL MAR)
               </text>
-              <text x="12" y="38" fill={themeStyles.axisText} fontSize="6.8" fontFamily="Roboto Condensed, sans-serif" opacity="0.8">
+              <text x="12" y="37" fill={themeStyles.axisText} fontSize="6.8" fontFamily="Roboto Condensed, sans-serif" opacity="0.8">
                 BAROMÉTRICA: {pressure.toFixed(3)} kPa · ASHRAE FUNDAMENTALS 2021
               </text>
             </g>
           )}
 
-          {/* Interactive Official ASHRAE Protractor in Top-Left Area */}
+          {/* Interactive Official ASHRAE Protractor in Top-Left Area (Cleanly spaced below title block) */}
           {showProtractor && chartType === 'carrier' && (
             <ASHRAEProtractor
-              x0={margin.left + 235}
-              y0={margin.top + 80}
+              x0={margin.left + 230}
+              y0={margin.top + 124}
               radius={72}
               plotWidth={plotWidth}
               plotHeight={plotHeight}
@@ -1437,6 +2012,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
             const deltaT = bounds.tdbMax - tRef;
             const wTarget = wRef + dWdT * deltaT;
             const [tx, ty] = coordToPixel(bounds.tdbMax, wTarget);
+            const shrLineX = margin.left + plotWidth + 76;
 
             return (
               <g className="shf-reference-ray pointer-events-none">
@@ -1449,7 +2025,18 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
                   strokeWidth="1.6"
                   strokeDasharray="4,2"
                 />
-                <circle cx={tx} cy={ty} r="3" fill="#F59E0B" />
+                <line
+                  x1={tx}
+                  y1={ty}
+                  x2={shrLineX}
+                  y2={ty}
+                  stroke="#F59E0B"
+                  strokeWidth="1.2"
+                  strokeDasharray="2,2"
+                  opacity="0.85"
+                />
+                <circle cx={tx} cy={ty} r="2.5" fill="#F59E0B" />
+                <circle cx={shrLineX} cy={ty} r="3.5" fill="#F59E0B" />
               </g>
             );
           })()}
@@ -1508,61 +2095,76 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
         </g>
 
         {/* Sensible Heat Factor Vertical Scale (Margen Derecho - Carta Valcon / ASHRAE) */}
-        <g className="shf-vertical-scale" transform={`translate(${margin.left + plotWidth + 34}, 0)`}>
-          <line
-            x1="0"
-            y1={margin.top}
-            x2="0"
-            y2={margin.top + plotHeight}
-            stroke={themeStyles.axisLine}
-            strokeWidth="1.2"
-          />
-          {shfScaleTicks.map((tick) => {
-            if (!tick.inRange) return null;
-            const isSelected = selectedSHR === tick.shr;
-            return (
-              <g
-                key={`shf-${tick.shr}`}
-                transform={`translate(0, ${tick.py})`}
-                className="cursor-pointer group"
-                onClick={() => setSelectedSHR(isSelected ? null : tick.shr)}
-              >
-                {/* Hit area for clicking */}
-                <line x1="-8" x2="26" stroke="transparent" strokeWidth="8" />
-                <line
-                  x1="0"
-                  x2={tick.isMajor ? 6 : 3}
-                  stroke={isSelected ? '#F59E0B' : themeStyles.axisLine}
-                  strokeWidth={isSelected ? 2 : tick.isMajor ? 1.2 : 0.7}
-                />
-                {tick.isMajor && (
-                  <text
-                    x="9"
-                    y="2.5"
-                    fill={isSelected ? '#F59E0B' : themeStyles.axisText}
-                    fontSize="7"
-                    fontFamily="Fira Code, monospace"
-                    fontWeight={isSelected ? 'bold' : '600'}
-                  >
-                    {tick.label}
-                  </text>
-                )}
-              </g>
-            );
-          })}
-          <text
-            x="26"
-            y={margin.top + plotHeight / 2}
-            textAnchor="middle"
-            transform={`rotate(90, 26, ${margin.top + plotHeight / 2})`}
-            fill={themeStyles.axisLabel}
-            fontSize="8"
-            fontWeight="bold"
-            fontFamily="Roboto Condensed, sans-serif"
-          >
-            FACTOR DE CALOR SENSIBLE (FCS / SHR)
-          </text>
-        </g>
+        {showProtractor && chartType === 'carrier' && (
+          <g className="shf-vertical-scale" transform={`translate(${margin.left + plotWidth + 76}, 0)`}>
+            <line
+              x1="0"
+              y1={margin.top}
+              x2="0"
+              y2={margin.top + plotHeight}
+              stroke={themeStyles.axisLine}
+              strokeWidth="1.2"
+            />
+            {/* Top header title */}
+            <text
+              x="0"
+              y={margin.top - 12}
+              textAnchor="middle"
+              fill={themeStyles.axisLabel}
+              fontSize="9"
+              fontWeight="bold"
+              fontFamily="Roboto Condensed, sans-serif"
+            >
+              FCS / SHR
+            </text>
+            {shfScaleTicks.map((tick) => {
+              if (!tick.inRange) return null;
+              const isSelected = selectedSHR === tick.shr;
+              return (
+                <g
+                  key={`shf-${tick.shr}`}
+                  transform={`translate(0, ${tick.py})`}
+                  className="cursor-pointer group"
+                  onClick={() => setSelectedSHR(isSelected ? null : tick.shr)}
+                >
+                  {/* Hit area for clicking */}
+                  <line x1="-10" x2="30" stroke="transparent" strokeWidth="10" />
+                  <line
+                    x1="0"
+                    x2={tick.isMajor ? 6 : 3.5}
+                    stroke={isSelected ? '#F59E0B' : themeStyles.axisLine}
+                    strokeWidth={isSelected ? 2 : tick.isMajor ? 1.2 : 0.8}
+                  />
+                  {tick.isMajor && (
+                    <text
+                      x="9"
+                      y="2.5"
+                      fill={isSelected ? '#F59E0B' : themeStyles.axisText}
+                      fontSize="7.5"
+                      fontFamily="Fira Code, monospace"
+                      fontWeight={isSelected ? 'bold' : '600'}
+                    >
+                      {tick.label}
+                    </text>
+                  )}
+                </g>
+              );
+            })}
+            <text
+              x="36"
+              y={margin.top + plotHeight / 2}
+              textAnchor="middle"
+              transform={`rotate(-90, 36, ${margin.top + plotHeight / 2})`}
+              fill={themeStyles.axisLabel}
+              fontSize="8.5"
+              fontWeight="bold"
+              fontFamily="Roboto Condensed, sans-serif"
+              letterSpacing="0.4"
+            >
+              FACTOR DE CALOR SENSIBLE (FCS / SHR)
+            </text>
+          </g>
+        )}
 
         {/* Dynamic Precision Crosshairs and Alignment Indicators */}
         {hoverCoords && !isPanning && (
@@ -1706,7 +2308,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
           </text>
         </g>
 
-        {/* 4. Anchored Fixed Y-Axis at Right of Plot */}
+        {/* 4. Anchored Fixed Y-Axis at Right of Plot (Humidity Ratio) */}
         <g className="y-axis" transform={`translate(${margin.left + plotWidth}, 0)`}>
           <line
             x1="0"
@@ -1716,19 +2318,32 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
             stroke={themeStyles.axisLine}
             strokeWidth="1.5"
           />
+          {/* Top header title */}
+          <text
+            x="4"
+            y={margin.top - 12}
+            textAnchor="start"
+            fill={themeStyles.axisLabel}
+            fontSize="9"
+            fontWeight="bold"
+            fontFamily="Roboto Condensed, sans-serif"
+          >
+            W [{units === 'IP' ? 'gr/lb' : 'g/kg'}]
+          </text>
           {yTicks.map((w) => {
             const [, y] = coordToPixel(bounds.tdbMin, w);
             const displayVal =
               units === 'IP' ? (w * 7000).toFixed(0) : (w * 1000).toFixed(0);
             return (
               <g key={`y-tick-${w}`} transform={`translate(0, ${y})`}>
-                <line x1="0" x2="6" stroke={themeStyles.axisLine} strokeWidth="1.5" />
+                <line x1="0" x2="5" stroke={themeStyles.axisLine} strokeWidth="1.5" />
                 <text
-                  x="10"
-                  y="4"
+                  x="8"
+                  y="3.5"
                   fill={themeStyles.axisText}
-                  fontSize="11"
+                  fontSize="10"
                   fontFamily="Fira Code, monospace"
+                  fontWeight="600"
                 >
                   {displayVal}
                 </text>
@@ -1736,14 +2351,14 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
             );
           })}
 
-          {/* Dynamic Active Y Marker under cursor */}
+          {/* Dynamic Active Y Marker under cursor (compact width strictly inside lane) */}
           {hoverCoords && !isPanning && (
             <g transform={`translate(0, ${hoverCoords.y})`} className="pointer-events-none">
-              <polygon points="0,0 6,-4 6,4" fill={themeStyles.isDark ? '#F59E0B' : '#D97706'} />
+              <polygon points="0,0 5,-3.5 5,3.5" fill={themeStyles.isDark ? '#F59E0B' : '#D97706'} />
               <rect
-                x="6"
+                x="5"
                 y="-8"
-                width="48"
+                width="36"
                 height="16"
                 rx="3"
                 fill={themeStyles.isDark ? '#0F172A' : '#D97706'}
@@ -1751,27 +2366,27 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
                 strokeWidth="1"
               />
               <text
-                x="30"
+                x="23"
                 y="3.5"
                 textAnchor="middle"
                 fill="#FFFFFF"
-                fontSize="9"
+                fontSize="8.5"
                 fontWeight="bold"
                 fontFamily="Fira Code, monospace"
               >
                 {units === 'IP'
                   ? `${(hoverCoords.w * 7000).toFixed(0)}gr`
-                  : `${(hoverCoords.w * 1000).toFixed(2)}g`}
+                  : `${(hoverCoords.w * 1000).toFixed(1)}g`}
               </text>
             </g>
           )}
           <text
-            x="48"
+            x="46"
             y={margin.top + plotHeight / 2}
             textAnchor="middle"
-            transform={`rotate(90, 48, ${margin.top + plotHeight / 2})`}
+            transform={`rotate(-90, 46, ${margin.top + plotHeight / 2})`}
             fill={themeStyles.axisLabel}
-            fontSize="12"
+            fontSize="10.5"
             fontWeight="bold"
             fontFamily="Roboto Condensed, sans-serif"
           >

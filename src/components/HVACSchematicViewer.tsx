@@ -1,7 +1,8 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import {
   StatePoint,
   ProcessConnection,
+  ProcessType,
   UnitSystem,
   ChartType,
   ChartLayerVisibility,
@@ -19,6 +20,8 @@ import { PsychrometricChart } from './PsychrometricChart';
 import { IDAESectionSymbol } from './IDAESymbols';
 import { BuildingSystemIDAESchematic } from './BuildingSystemIDAESchematic';
 import { IDAESymbolGuideModal } from './IDAESymbolGuideModal';
+import { AhuExampleGuideModal } from './AhuExampleGuideModal';
+import { AhuLongitudinalSvg } from './AhuLongitudinalSvg';
 import {
   AirVent,
   Sliders,
@@ -61,6 +64,7 @@ import {
   LayoutTemplate,
   ShieldCheck,
   Thermometer,
+  TrendingUp,
 } from 'lucide-react';
 
 interface HVACSchematicViewerProps {
@@ -76,6 +80,7 @@ interface HVACSchematicViewerProps {
   pressure: number;
   chartType: ChartType;
   layers: ChartLayerVisibility;
+  onNavigateToView?: (view: 'chart' | 'points' | 'processes' | 'comfort' | 'schematic') => void;
 }
 
 interface ViewTransform {
@@ -335,15 +340,39 @@ const AHU_ARCHETYPES: Array<{
   moduleTypes: AHUModuleType[];
 }> = [
   {
+    id: 'idae_fig2_superior',
+    name: 'Guía IDAE Figura 2 (Superior): UTA sin Baterías (1,30 m)',
+    description: 'Configuración canónica Fig. 2 (Superior): Aire exterior + Prefiltro (0,40 m) + Filtro de bolsas F7 (0,40 m) + Ventilador directo Plug-Fan (0,50 m). Longitud total: 1,30 m.',
+    moduleTypes: ['prefilter', 'final_filter', 'fan'],
+  },
+  {
+    id: 'idae_fig2_inferior',
+    name: 'Guía IDAE Figura 2 (Inferior): UTA con Baterías Térmicas (2,10 m)',
+    description: 'Configuración canónica Fig. 2 (Inferior): Aire exterior + Prefiltro (0,40 m) + Batería Fría (−) + Batería Calor (+) + Filtro F7 (0,40 m) + Ventilador directo Plug-Fan (0,50 m). Longitud total: 2,10 m.',
+    moduleTypes: ['prefilter', 'cooling_coil', 'heating_coil', 'final_filter', 'fan'],
+  },
+  {
+    id: 'idae_fig1_superior_sin_baterias',
+    name: 'Guía IDAE Figura 1 (Superior): UTA sin Baterías (1,70 m)',
+    description: 'Composición 1 de Fig. 1 IDAE: Aire exterior + Prefiltro + Ventilador + Plenum + Filtro + Aire Impulsado.',
+    moduleTypes: ['prefilter', 'fan', 'plenum', 'final_filter'],
+  },
+  {
+    id: 'idae_fig1_inferior_con_baterias',
+    name: 'Guía IDAE Figura 1 (Inferior): UTA con Baterías Térmicas (2,50 m)',
+    description: 'Composición 2 de Fig. 1 IDAE: Aire exterior + Prefiltro + Baterías (Frío − y Calor +) + Ventilador + Plenum + Filtro + Aire Impulsado.',
+    moduleTypes: ['prefilter', 'cooling_coil', 'heating_coil', 'fan', 'plenum', 'final_filter'],
+  },
+  {
     id: 'idae_fig1_belt_fan',
-    name: 'UTA Correas y Poleas (Guía IDAE Fig. 1, Pág. 16)',
-    description: 'Configuración canónica IDAE Fig. 1: Prefiltro G4/F6 + Baterías Térmicas (+) + Ventilador accionado por correas y poleas + Filtro final de bolsas F7.',
+    name: 'UTA Correas y Poleas (Guía IDAE Fig. 1 con Voluta)',
+    description: 'Configuración IDAE con ventilador centrífugo accionado por transmisión de correas y poleas.',
     moduleTypes: ['prefilter', 'cooling_coil', 'heating_coil', 'belt_fan', 'final_filter'],
   },
   {
     id: 'idae_fig2_direct_fan',
-    name: 'UTA Acoplamiento Directo (Guía IDAE Fig. 2, Pág. 16)',
-    description: 'Configuración canónica IDAE Fig. 2: Prefiltro + Baterías + Filtro de bolsas + Ventilador de acoplamiento directo al final de la climatizadora.',
+    name: 'UTA Acoplamiento Directo (Guía IDAE Fig. 2 Inferior)',
+    description: 'Configuración canónica IDAE Fig. 2: Prefiltro + Baterías + Filtro de bolsas + Ventilador de acoplamiento directo al final.',
     moduleTypes: ['prefilter', 'cooling_coil', 'heating_coil', 'final_filter', 'fan'],
   },
   {
@@ -438,6 +467,514 @@ const AHU_ARCHETYPES: Array<{
   },
 ];
 
+export interface AHUStepResult {
+  stepIndex: number;
+  module: AHUModuleItem;
+  entryPoint: StatePoint;
+  exitPoint: StatePoint;
+  isTransformation: boolean;
+  processType?: ProcessType;
+  processName?: string;
+  processColor?: string;
+  associatedPointId: string;
+  associatedPointName: string;
+  associatedPointColor: string;
+  metrics?: {
+    qSensible: number;
+    qLatent: number;
+    qTotal: number;
+    moistureExchange: number;
+    shr: number;
+    adp?: number;
+    bypassFactor?: number;
+  };
+}
+
+export function computeAHUCycle(
+  moduleList: AHUModuleItem[],
+  outdoorPoint: StatePoint,
+  returnPoint: StatePoint,
+  pressure: number
+) {
+  const enabledList = moduleList.filter((m) => m.enabled);
+  const outdoor = { ...outdoorPoint, id: 'pt-1', name: '1. Exterior (ODA)' };
+  const returnPt = { ...returnPoint, id: 'pt-2', name: '2. Retorno (RA)' };
+
+  let currentAir = outdoor;
+  let ptCounter = 3;
+  const newPoints: StatePoint[] = [outdoor, returnPt];
+  const newProcesses: ProcessConnection[] = [];
+  const steps: AHUStepResult[] = [];
+
+  let totalCoolingKW = 0;
+  let totalHeatingKW = 0;
+  let totalRecoveredKW = 0;
+  let totalCondensateLh = 0;
+
+  enabledList.forEach((mod, idx) => {
+    const entry = currentAir;
+    let exit = entry;
+    let isTransformation = false;
+    let processType: ProcessType | undefined;
+    let processName: string | undefined;
+    let processColor: string | undefined;
+    let associatedPointId = entry.id;
+    let associatedPointName = entry.name;
+    let associatedPointColor = '#64748B';
+    let stepMetrics: AHUStepResult['metrics'];
+
+    if (mod.type === 'cooling_coil') {
+      const exitT = mod.params.exitTdb ?? 12.8;
+      const exitRh = mod.params.exitRh ?? 95;
+      exit = solveStatePoint({ mode: 'tdb_rh', tdb: exitT, rh: exitRh }, pressure, {
+        id: `pt-${ptCounter}`,
+        name: `${ptCounter}. Batería Fría (CC)`,
+        color: '#38BDF8',
+        volumeFlow: entry.volumeFlow,
+      });
+      isTransformation = true;
+      processType = 'cooling_dehumid';
+      processName = 'Enfriamiento & Deshumectación';
+      processColor = '#38BDF8';
+      associatedPointId = exit.id;
+      associatedPointName = exit.name;
+      associatedPointColor = '#38BDF8';
+      stepMetrics = calculateProcessMetrics(entry, exit, entry.massFlow);
+
+      newPoints.push(exit);
+      newProcesses.push({
+        id: `proc-cool-${mod.id}`,
+        name: 'Enfriamiento & Deshumectación',
+        type: 'cooling_dehumid',
+        fromPointId: entry.id,
+        toPointId: exit.id,
+        bypassFactor: mod.params.bypassFactor ?? 0.1,
+        color: '#38BDF8',
+        ...stepMetrics,
+      });
+
+      totalCoolingKW += Math.abs(stepMetrics.qTotal);
+      totalCondensateLh += Math.abs(stepMetrics.moistureExchange);
+      currentAir = exit;
+      ptCounter++;
+    } else if (mod.type === 'heating_coil') {
+      const heatT = mod.params.heatingTdb ?? 16.5;
+      exit = solveStatePoint({ mode: 'tdb_w', tdb: heatT, w: entry.w }, pressure, {
+        id: `pt-${ptCounter}`,
+        name: `${ptCounter}. Batería Calor (HC)`,
+        color: '#EF4444',
+        volumeFlow: entry.volumeFlow,
+      });
+      isTransformation = true;
+      processType = 'sensible_heating';
+      processName = 'Calentamiento Sensible';
+      processColor = '#EF4444';
+      associatedPointId = exit.id;
+      associatedPointName = exit.name;
+      associatedPointColor = '#EF4444';
+      stepMetrics = calculateProcessMetrics(entry, exit, entry.massFlow);
+
+      newPoints.push(exit);
+      newProcesses.push({
+        id: `proc-heat-${mod.id}`,
+        name: 'Calentamiento Sensible',
+        type: 'sensible_heating',
+        fromPointId: entry.id,
+        toPointId: exit.id,
+        color: '#EF4444',
+        ...stepMetrics,
+      });
+
+      totalHeatingKW += Math.abs(stepMetrics.qSensible);
+      currentAir = exit;
+      ptCounter++;
+    } else if (mod.type === 'electric_heater') {
+      const heatT = mod.params.heatingTdb ?? 20.0;
+      exit = solveStatePoint({ mode: 'tdb_w', tdb: heatT, w: entry.w }, pressure, {
+        id: `pt-${ptCounter}`,
+        name: `${ptCounter}. Resistencias (+ Eléc)`,
+        color: '#EF4444',
+        volumeFlow: entry.volumeFlow,
+      });
+      isTransformation = true;
+      processType = 'sensible_heating';
+      processName = 'Calentamiento Eléctrico';
+      processColor = '#EF4444';
+      associatedPointId = exit.id;
+      associatedPointName = exit.name;
+      associatedPointColor = '#EF4444';
+      stepMetrics = calculateProcessMetrics(entry, exit, entry.massFlow);
+
+      newPoints.push(exit);
+      newProcesses.push({
+        id: `proc-elec-${mod.id}`,
+        name: 'Calentamiento Eléctrico Blindado',
+        type: 'sensible_heating',
+        fromPointId: entry.id,
+        toPointId: exit.id,
+        color: '#EF4444',
+        ...stepMetrics,
+      });
+
+      totalHeatingKW += Math.abs(stepMetrics.qSensible);
+      currentAir = exit;
+      ptCounter++;
+    } else if (mod.type === 'mixing_box') {
+      const r = mod.params.outdoorRatio ?? 0.3;
+      const tdbMix = r * entry.tdb + (1 - r) * returnPt.tdb;
+      const wMix = r * entry.w + (1 - r) * returnPt.w;
+      exit = solveStatePoint({ mode: 'tdb_w', tdb: tdbMix, w: wMix }, pressure, {
+        id: `pt-${ptCounter}`,
+        name: `${ptCounter}. Mezcla (MA)`,
+        color: '#F59E0B',
+        volumeFlow: entry.volumeFlow,
+      });
+      isTransformation = true;
+      processType = 'mixing';
+      processName = 'Mezcla ODA + RA';
+      processColor = '#F59E0B';
+      associatedPointId = exit.id;
+      associatedPointName = exit.name;
+      associatedPointColor = '#F59E0B';
+      stepMetrics = calculateProcessMetrics(entry, exit, entry.massFlow);
+
+      newPoints.push(exit);
+      newProcesses.push({
+        id: `proc-mix-${mod.id}`,
+        name: 'Mezcla ODA + RA',
+        type: 'mixing',
+        fromPointId: entry.id,
+        toPointId: exit.id,
+        secondaryFromPointId: returnPt.id,
+        mixingRatio: r,
+        color: '#F59E0B',
+        ...stepMetrics,
+      });
+
+      currentAir = exit;
+      ptCounter++;
+    } else if (mod.type === 'heat_recovery') {
+      const eff = mod.params.recoveryEfficiency ?? 0.75;
+      const tdbRec = entry.tdb + eff * (returnPt.tdb - entry.tdb);
+      exit = solveStatePoint({ mode: 'tdb_w', tdb: tdbRec, w: entry.w }, pressure, {
+        id: `pt-${ptCounter}`,
+        name: `${ptCounter}. Post-Recuperador`,
+        color: '#0EA5E9',
+        volumeFlow: entry.volumeFlow,
+      });
+      isTransformation = true;
+      processType = 'heat_recovery';
+      processName = 'Recuperación de Calor η';
+      processColor = '#0EA5E9';
+      associatedPointId = exit.id;
+      associatedPointName = exit.name;
+      associatedPointColor = '#0EA5E9';
+      stepMetrics = calculateProcessMetrics(entry, exit, entry.massFlow);
+
+      newPoints.push(exit);
+      newProcesses.push({
+        id: `proc-rec-${mod.id}`,
+        name: 'Recuperador de Calor η',
+        type: entry.tdb > returnPt.tdb ? 'sensible_cooling' : 'sensible_heating',
+        fromPointId: entry.id,
+        toPointId: exit.id,
+        color: '#0EA5E9',
+        ...stepMetrics,
+      });
+
+      totalRecoveredKW += Math.abs(stepMetrics.qSensible);
+      currentAir = exit;
+      ptCounter++;
+    } else if (mod.type === 'rotary_wheel') {
+      const eff = mod.params.recoveryEfficiency ?? 0.78;
+      const effLat = eff * 0.72;
+      const tdbRec = entry.tdb + eff * (returnPt.tdb - entry.tdb);
+      const wRec = entry.w + effLat * (returnPt.w - entry.w);
+      exit = solveStatePoint({ mode: 'tdb_w', tdb: tdbRec, w: wRec }, pressure, {
+        id: `pt-${ptCounter}`,
+        name: `${ptCounter}. Rueda Entálpica`,
+        color: '#10B981',
+        volumeFlow: entry.volumeFlow,
+      });
+      isTransformation = true;
+      processType = 'heat_recovery';
+      processName = 'Recuperador Rotativo Entálpico';
+      processColor = '#10B981';
+      associatedPointId = exit.id;
+      associatedPointName = exit.name;
+      associatedPointColor = '#10B981';
+      stepMetrics = calculateProcessMetrics(entry, exit, entry.massFlow);
+
+      newPoints.push(exit);
+      newProcesses.push({
+        id: `proc-wheel-${mod.id}`,
+        name: 'Rueda Entálpica Rotativa',
+        type: 'heat_recovery',
+        fromPointId: entry.id,
+        toPointId: exit.id,
+        color: '#10B981',
+        ...stepMetrics,
+      });
+
+      totalRecoveredKW += Math.abs(stepMetrics.qTotal);
+      currentAir = exit;
+      ptCounter++;
+    } else if (mod.type === 'adiabatic_cooling') {
+      const targetRh = mod.params.targetRh ?? 85;
+      exit = solveStatePoint({ mode: 'twb_rh', twb: entry.twb, rh: targetRh }, pressure, {
+        id: `pt-${ptCounter}`,
+        name: `${ptCounter}. Adiabático`,
+        color: '#0284C7',
+        volumeFlow: entry.volumeFlow,
+      });
+      isTransformation = true;
+      processType = 'adiabatic_humid';
+      processName = 'Enfriamiento Adiabático';
+      processColor = '#0284C7';
+      associatedPointId = exit.id;
+      associatedPointName = exit.name;
+      associatedPointColor = '#0284C7';
+      stepMetrics = calculateProcessMetrics(entry, exit, entry.massFlow);
+
+      newPoints.push(exit);
+      newProcesses.push({
+        id: `proc-adiab-${mod.id}`,
+        name: 'Enfriamiento Adiabático por Aspersión',
+        type: 'adiabatic_humid',
+        fromPointId: entry.id,
+        toPointId: exit.id,
+        color: '#0284C7',
+        ...stepMetrics,
+      });
+
+      currentAir = exit;
+      ptCounter++;
+    } else if (mod.type === 'humidifier') {
+      const targetRh = mod.params.targetRh ?? 50;
+      const isEvap = mod.params.humidifierType === 'evaporative_pad';
+      exit = isEvap
+        ? solveStatePoint({ mode: 'twb_rh', twb: entry.twb, rh: targetRh }, pressure, {
+            id: `pt-${ptCounter}`,
+            name: `${ptCounter}. Humidificación`,
+            color: '#A855F7',
+            volumeFlow: entry.volumeFlow,
+          })
+        : solveStatePoint({ mode: 'tdb_rh', tdb: entry.tdb, rh: targetRh }, pressure, {
+            id: `pt-${ptCounter}`,
+            name: `${ptCounter}. Humidificación`,
+            color: '#A855F7',
+            volumeFlow: entry.volumeFlow,
+          });
+      isTransformation = true;
+      processType = isEvap ? 'adiabatic_humid' : 'steam_humid';
+      processName = isEvap ? 'Humidificación Evaporativa' : 'Humidificación de Vapor';
+      processColor = '#A855F7';
+      associatedPointId = exit.id;
+      associatedPointName = exit.name;
+      associatedPointColor = '#A855F7';
+      stepMetrics = calculateProcessMetrics(entry, exit, entry.massFlow);
+
+      newPoints.push(exit);
+      newProcesses.push({
+        id: `proc-hum-${mod.id}`,
+        name: isEvap ? 'Humidificación Evaporativa' : 'Inyección de Vapor Seco',
+        type: isEvap ? 'adiabatic_humid' : 'steam_humid',
+        fromPointId: entry.id,
+        toPointId: exit.id,
+        color: '#A855F7',
+        ...stepMetrics,
+      });
+
+      currentAir = exit;
+      ptCounter++;
+    } else if (mod.type === 'fan' || mod.type === 'belt_fan') {
+      const fanRise = mod.params.tempRise ?? 0.8;
+      const supT = entry.tdb + fanRise;
+      exit = solveStatePoint({ mode: 'tdb_w', tdb: supT, w: entry.w }, pressure, {
+        id: `pt-${ptCounter}`,
+        name: `${ptCounter}. Impulsión (SUP)`,
+        color: '#06B6D4',
+        volumeFlow: entry.volumeFlow,
+      });
+      isTransformation = true;
+      processType = 'sensible_heating';
+      processName = 'Salto Térmico del Rodete';
+      processColor = '#10B981';
+      associatedPointId = exit.id;
+      associatedPointName = exit.name;
+      associatedPointColor = '#06B6D4';
+      stepMetrics = calculateProcessMetrics(entry, exit, entry.massFlow);
+
+      newPoints.push(exit);
+      newProcesses.push({
+        id: `proc-fan-${mod.id}`,
+        name: 'Salto Ventilador',
+        type: 'sensible_heating',
+        fromPointId: entry.id,
+        toPointId: exit.id,
+        color: '#10B981',
+        ...stepMetrics,
+      });
+
+      totalHeatingKW += Math.abs(stepMetrics.qSensible);
+      currentAir = exit;
+      ptCounter++;
+    } else {
+      // Passive module
+      associatedPointId = (mod.type === 'prefilter' || mod.type === 'prefilter_flat' || mod.type === 'intake_damper')
+        ? outdoor.id
+        : entry.id;
+      associatedPointName = (mod.type === 'prefilter' || mod.type === 'prefilter_flat' || mod.type === 'intake_damper')
+        ? outdoor.name
+        : entry.name;
+      associatedPointColor = (mod.type === 'prefilter' || mod.type === 'prefilter_flat')
+        ? '#F43F5E'
+        : mod.type === 'final_filter'
+        ? '#EC4899'
+        : '#64748B';
+    }
+
+    steps.push({
+      stepIndex: idx,
+      module: mod,
+      entryPoint: entry,
+      exitPoint: exit,
+      isTransformation,
+      processType,
+      processName,
+      processColor,
+      associatedPointId,
+      associatedPointName,
+      associatedPointColor,
+      metrics: stepMetrics,
+    });
+  });
+
+  // Connect supply to room target
+  const roomTarget = solveStatePoint({ mode: 'tdb_rh', tdb: 24.5, rh: 50 }, pressure, {
+    id: `pt-${ptCounter}`,
+    name: `${ptCounter}. Zona Interior (IDA)`,
+    color: '#8B5CF6',
+    volumeFlow: currentAir.volumeFlow,
+  });
+  newPoints.push(roomTarget);
+  newProcesses.push({
+    id: 'proc-room',
+    name: 'Carga Térmica del Local (SHR)',
+    type: 'zone_load',
+    fromPointId: currentAir.id,
+    toPointId: roomTarget.id,
+    color: '#8B5CF6',
+    ...calculateProcessMetrics(currentAir, roomTarget, currentAir.massFlow),
+  });
+
+  const totalPressureDrop = enabledList.reduce((acc, m) => acc + (m.pressureDropPa || 0), 0);
+
+  return {
+    steps,
+    newPoints,
+    newProcesses,
+    supplyPoint: currentAir,
+    totalPressureDrop,
+    coolingPowerKW: totalCoolingKW,
+    heatingPowerKW: totalHeatingKW,
+    recoveredPowerKW: totalRecoveredKW,
+    condensateLitersPerHour: totalCondensateLh,
+  };
+}
+
+// Width definition for each section (Proportional to official IDAE 0,40m / 0,50m lengths)
+export const AHU_MODULE_WIDTHS: Record<AHUModuleType, number> = {
+  intake_damper: 95,
+  prefilter: 120,
+  prefilter_flat: 65,
+  mixing_box: 135,
+  heat_recovery: 155,
+  rotary_wheel: 145,
+  cooling_coil: 90,
+  heating_coil: 90,
+  electric_heater: 90,
+  adiabatic_cooling: 135,
+  humidifier: 115,
+  droplet_eliminator: 75,
+  fan: 150,
+  belt_fan: 150,
+  return_fan: 150,
+  plenum: 120,
+  final_filter: 120,
+  silencer: 125,
+  exhaust_damper: 95,
+};
+
+// Dimensions in meters matching the official IDAE guide (Págs. 16, 17, 18, 71, 73, 81)
+export const AHU_MODULE_DIMENSIONS_METERS: Record<AHUModuleType, number> = {
+  intake_damper: 0.35,
+  prefilter: 0.40,
+  prefilter_flat: 0.15,
+  mixing_box: 0.45,
+  heat_recovery: 0.60,
+  rotary_wheel: 0.60,
+  cooling_coil: 0.40,
+  heating_coil: 0.40,
+  electric_heater: 0.35,
+  adiabatic_cooling: 0.45,
+  humidifier: 0.35,
+  droplet_eliminator: 0.20,
+  fan: 0.50,
+  belt_fan: 0.50,
+  return_fan: 0.50,
+  plenum: 0.40,
+  final_filter: 0.40,
+  silencer: 0.45,
+  exhaust_damper: 0.35,
+};
+
+// Canonical IDAE Module Header Titles (Figures 1, 2, 11, 16, Pages 73 & 81)
+export const getIdaeModuleTitle = (mod: AHUModuleItem): string => {
+  switch (mod.type) {
+    case 'prefilter':
+      return 'Prefiltro';
+    case 'prefilter_flat':
+      return 'Prefiltro';
+    case 'cooling_coil':
+      return 'Baterías (−)';
+    case 'heating_coil':
+      return 'Baterías (+)';
+    case 'electric_heater':
+      return 'Baterías (+ Eléc.)';
+    case 'belt_fan':
+      return 'Ventilador';
+    case 'fan':
+      return 'Ventilador';
+    case 'return_fan':
+      return 'Vent. Retorno';
+    case 'final_filter':
+      return 'Filtro';
+    case 'plenum':
+      return 'Plenum';
+    case 'heat_recovery':
+      return 'Recuperador';
+    case 'rotary_wheel':
+      return 'Rotor η';
+    case 'adiabatic_cooling':
+      return 'Enfriam. adiabático';
+    case 'droplet_eliminator':
+      return 'Sep. Gotas';
+    case 'mixing_box':
+      return 'Cám. Mezcla';
+    case 'intake_damper':
+      return 'Toma ODA';
+    case 'exhaust_damper':
+      return 'Expulsión EHA';
+    case 'silencer':
+      return 'Silenciador';
+    case 'humidifier':
+      return 'Humidificador';
+    default:
+      return mod.name.split(' ')[0];
+  }
+};
+
 export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
   points,
   processes,
@@ -451,6 +988,7 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
   pressure,
   chartType,
   layers,
+  onNavigateToView,
 }) => {
   // Schematic mode: 'ahu_section', 'building_system', 'split_sync'
   const [schematicMode, setSchematicMode] = useState<'ahu_section' | 'building_system' | 'split_sync'>('ahu_section');
@@ -515,6 +1053,35 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
     },
   ]);
 
+  // Filter out disabled modules for physical layout representation
+  const enabledModules = useMemo(() => modules.filter((m) => m.enabled), [modules]);
+  const moduleWidths = AHU_MODULE_WIDTHS;
+  const moduleDimensionsMeters = AHU_MODULE_DIMENSIONS_METERS;
+
+  // Total AHU length in meters
+  const totalLengthMeters = useMemo(() => {
+    return Number(
+      enabledModules
+        .reduce((sum, m) => sum + (moduleDimensionsMeters[m.type] || 0.40), 0)
+        .toFixed(2)
+    );
+  }, [enabledModules, moduleDimensionsMeters]);
+
+  // Calculate dynamic chassis width based on assembled modules (tight engineering fit matching 01.png)
+  const dynamicChassisWidth = useMemo(() => {
+    if (enabledModules.length === 0) return 400;
+    const totalContentWidth = enabledModules.reduce(
+      (sum, mod) => sum + (moduleWidths[mod.type] || 120),
+      0
+    );
+    return totalContentWidth + 12; // 6px wall thickness inset on each side
+  }, [enabledModules, moduleWidths]);
+
+  // Dynamic SVG ViewBox width (tight fit without dead space)
+  const dynamicSvgViewBoxWidth = useMemo(() => {
+    return dynamicChassisWidth + 280;
+  }, [dynamicChassisWidth]);
+
   // Selected module for parameters configuration
   const [editingModuleId, setEditingModuleId] = useState<string | null>('mod-cooling');
 
@@ -539,6 +1106,33 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
   // Longitudinal section view mode: 'elevation' (Alzado), 'plan' (Planta), 'dual' (Alzado + Planta - Págs 17/18)
   const [cutViewMode, setCutViewMode] = useState<'elevation' | 'plan' | 'dual'>('elevation');
 
+  // Properties detail mode in section joints: 'full' (all properties %HR, T, w, h, ΔT, ΔHR, Δw, ΔP, Q), 'compact' (T, HR), or 'hover' (floating HUD on hover)
+  const [propertiesDetailMode, setPropertiesDetailMode] = useState<'full' | 'compact' | 'hover'>('hover');
+
+  // Dynamic SVG ViewBox height (tight fit for assembly and spaced cotas)
+  const dynamicSvgViewBoxHeight = useMemo(() => {
+    return cutViewMode === 'dual'
+      ? 650
+      : propertiesDetailMode === 'full'
+      ? 480
+      : propertiesDetailMode === 'compact'
+      ? 430
+      : 395;
+  }, [cutViewMode, propertiesDetailMode]);
+
+  // Boundaries for pan: strict clamping so content NEVER moves outside the white background window
+  const getPanBounds = useCallback((zoom: number) => {
+    const totalWidth = dynamicSvgViewBoxWidth;
+    const totalHeight = dynamicSvgViewBoxHeight;
+
+    // When zoom <= 1.05, content fits completely inside the white window and is locked
+    // When zoom > 1.05, panning is permitted only up to the sheet boundaries
+    const maxPanX = Math.max(0, (totalWidth * (zoom - 1.0)) / 2);
+    const maxPanY = Math.max(0, (totalHeight * (zoom - 1.0)) / 2);
+
+    return { maxPanX, maxPanY };
+  }, [dynamicSvgViewBoxWidth, dynamicSvgViewBoxHeight]);
+
   // Viewport Transform State (Zoom, Pan, Center)
   const [transform, setTransform] = useState<ViewTransform>({
     zoom: 1.0,
@@ -555,32 +1149,82 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
 
   // Archetypes selector modal/popover
   const [isArchetypesOpen, setIsArchetypesOpen] = useState<boolean>(false);
+  const archetypesDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close archetypes dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        archetypesDropdownRef.current &&
+        !archetypesDropdownRef.current.contains(event.target as Node)
+      ) {
+        setIsArchetypesOpen(false);
+      }
+    };
+
+    if (isArchetypesOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isArchetypesOpen]);
 
   // IDAE Symbol Guide Modal state
   const [isSymbolGuideOpen, setIsSymbolGuideOpen] = useState<boolean>(false);
 
-  // Zoom / Pan actions
+  // Anatomía y Ejemplo Didáctico de UTA Modal state
+  const [isAhuExampleOpen, setIsAhuExampleOpen] = useState<boolean>(false);
+
+  // Zoom / Pan actions with strict pan clamping
   const handleZoomIn = () => {
-    setTransform((prev) => ({
-      ...prev,
-      zoom: Math.min(3.5, Number((prev.zoom * 1.2).toFixed(2))),
-    }));
+    setTransform((prev) => {
+      const newZoom = Math.min(3.5, Number((prev.zoom * 1.2).toFixed(2)));
+      const { maxPanX, maxPanY } = getPanBounds(newZoom);
+      return {
+        zoom: newZoom,
+        panX: Math.max(-maxPanX, Math.min(maxPanX, prev.panX)),
+        panY: Math.max(-maxPanY, Math.min(maxPanY, prev.panY)),
+      };
+    });
   };
 
   const handleZoomOut = () => {
-    setTransform((prev) => ({
-      ...prev,
-      zoom: Math.max(0.35, Number((prev.zoom / 1.2).toFixed(2))),
-    }));
+    setTransform((prev) => {
+      const newZoom = Math.max(0.35, Number((prev.zoom / 1.2).toFixed(2)));
+      const { maxPanX, maxPanY } = getPanBounds(newZoom);
+      return {
+        zoom: newZoom,
+        panX: Math.max(-maxPanX, Math.min(maxPanX, prev.panX)),
+        panY: Math.max(-maxPanY, Math.min(maxPanY, prev.panY)),
+      };
+    });
   };
 
-  const handleZoomAll = () => {
+  // Zoom All fits the entire content tightly into the window dimensions
+  const handleZoomAll = useCallback(() => {
+    if (!ahuContainerRef.current) {
+      setTransform({ zoom: 1.0, panX: 0, panY: 0 });
+      return;
+    }
+    const container = ahuContainerRef.current;
+    const containerWidth = container.clientWidth;
+    const containerHeight = container.clientHeight;
+
+    const totalWidth = dynamicSvgViewBoxWidth;
+    const totalHeight = dynamicSvgViewBoxHeight;
+
+    const scaleX = (containerWidth - 32) / totalWidth;
+    const scaleY = (containerHeight - 32) / totalHeight;
+    const fitScale = Math.min(scaleX, scaleY);
+    const optimalZoom = Number(Math.min(2.5, Math.max(0.4, fitScale)).toFixed(2));
+
     setTransform({
-      zoom: 0.92,
+      zoom: optimalZoom,
       panX: 0,
       panY: 0,
     });
-  };
+  }, [dynamicSvgViewBoxWidth, dynamicSvgViewBoxHeight]);
 
   const handleCenterUnit = () => {
     setTransform((prev) => ({
@@ -598,17 +1242,22 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
     });
   };
 
-  // Mouse wheel zoom
+  // Mouse wheel zoom with pan clamping
   const handleWheel = (e: React.WheelEvent) => {
     e.preventDefault();
-    const factor = e.deltaY < 0 ? 1.12 : 0.88;
-    setTransform((prev) => ({
-      ...prev,
-      zoom: Math.min(3.5, Math.max(0.35, Number((prev.zoom * factor).toFixed(2)))),
-    }));
+    const factor = e.deltaY < 0 ? 1.12 : 0.89;
+    setTransform((prev) => {
+      const newZoom = Math.min(3.5, Math.max(0.35, Number((prev.zoom * factor).toFixed(2))));
+      const { maxPanX, maxPanY } = getPanBounds(newZoom);
+      return {
+        zoom: newZoom,
+        panX: Math.max(-maxPanX, Math.min(maxPanX, prev.panX)),
+        panY: Math.max(-maxPanY, Math.min(maxPanY, prev.panY)),
+      };
+    });
   };
 
-  // Canvas pan handlers (only when not interacting with draggable items or buttons)
+  // Canvas pan handlers with strict clamping preventing content from escaping outside the container
   const handleMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
     if ((e.target as HTMLElement).closest('button') || (e.target as HTMLElement).closest('input')) return;
@@ -625,10 +1274,22 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
     if (!isDraggingCanvas) return;
     const dx = e.clientX - dragStartRef.current.x;
     const dy = e.clientY - dragStartRef.current.y;
+    const containerWidth = ahuContainerRef.current?.clientWidth || 1000;
+    const svgScale = dynamicSvgViewBoxWidth / containerWidth;
+    const factor = svgScale / transform.zoom;
+
+    const { maxPanX, maxPanY } = getPanBounds(transform.zoom);
+    const targetPanX = dragStartRef.current.panX + dx * factor;
+    const targetPanY = dragStartRef.current.panY + dy * factor;
+
+    // Strict clamping so content NEVER escapes outside container (leaving blank screen)
+    const clampedPanX = Math.max(-maxPanX, Math.min(maxPanX, targetPanX));
+    const clampedPanY = Math.max(-maxPanY, Math.min(maxPanY, targetPanY));
+
     setTransform((prev) => ({
       ...prev,
-      panX: dragStartRef.current.panX + dx,
-      panY: dragStartRef.current.panY + dy,
+      panX: clampedPanX,
+      panY: clampedPanY,
     }));
   };
 
@@ -636,153 +1297,205 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
     setIsDraggingCanvas(false);
   };
 
-  // Filter out disabled modules for physical layout representation
-  const enabledModules = useMemo(() => modules.filter((m) => m.enabled), [modules]);
+  // Touch gesture support: 1-finger pan and 2-finger pinch-to-zoom
+  const touchStartRef = useRef<{
+    touches: { x: number; y: number }[];
+    distance: number;
+    initialZoom: number;
+    panX: number;
+    panY: number;
+  }>({
+    touches: [],
+    distance: 0,
+    initialZoom: 1,
+    panX: 0,
+    panY: 0,
+  });
 
-  // Width definition for each section
-  const moduleWidths: Record<AHUModuleType, number> = {
-    intake_damper: 95,
-    prefilter: 85,
-    prefilter_flat: 55,
-    mixing_box: 135,
-    heat_recovery: 155,
-    rotary_wheel: 145,
-    cooling_coil: 140,
-    heating_coil: 125,
-    electric_heater: 125,
-    adiabatic_cooling: 135,
-    humidifier: 115,
-    droplet_eliminator: 75,
-    fan: 160,
-    belt_fan: 165,
-    return_fan: 160,
-    plenum: 105,
-    final_filter: 95,
-    silencer: 125,
-    exhaust_damper: 95,
-  };
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if ((e.target as HTMLElement).closest('button') || (e.target as HTMLElement).closest('input')) return;
 
-  // Dimensions in meters matching the official IDAE guide (Págs. 16, 17, 18, 71, 73, 81)
-  const moduleDimensionsMeters: Record<AHUModuleType, number> = {
-    intake_damper: 0.35,
-    prefilter: 0.40,
-    prefilter_flat: 0.15,
-    mixing_box: 0.45,
-    heat_recovery: 0.60,
-    rotary_wheel: 0.60,
-    cooling_coil: 0.40,
-    heating_coil: 0.40,
-    electric_heater: 0.35,
-    adiabatic_cooling: 0.45,
-    humidifier: 0.35,
-    droplet_eliminator: 0.20,
-    fan: 0.50,
-    belt_fan: 0.50,
-    return_fan: 0.50,
-    plenum: 0.40,
-    final_filter: 0.40,
-    silencer: 0.45,
-    exhaust_damper: 0.35,
-  };
-
-  // Total AHU length in meters
-  const totalLengthMeters = useMemo(() => {
-    return Number(
-      enabledModules
-        .reduce((sum, m) => sum + (moduleDimensionsMeters[m.type] || 0.40), 0)
-        .toFixed(2)
-    );
-  }, [enabledModules]);
-
-  // Canonical IDAE Module Header Titles (Figures 1, 2, 11, 16, Pages 73 & 81)
-  const getIdaeModuleTitle = (mod: AHUModuleItem): string => {
-    switch (mod.type) {
-      case 'prefilter':
-        return 'Prefiltro';
-      case 'prefilter_flat':
-        return 'Prefiltro';
-      case 'cooling_coil':
-        return 'Baterías (−)';
-      case 'heating_coil':
-        return 'Baterías (+)';
-      case 'electric_heater':
-        return 'Baterías (+ Eléc.)';
-      case 'belt_fan':
-        return 'Ventilador';
-      case 'fan':
-        return 'Ventilador';
-      case 'return_fan':
-        return 'Vent. Retorno';
-      case 'final_filter':
-        return 'Filtro';
-      case 'plenum':
-        return 'Plenum';
-      case 'heat_recovery':
-        return 'Recuperador';
-      case 'rotary_wheel':
-        return 'Rotor η';
-      case 'adiabatic_cooling':
-        return 'Enfriam. adiabático';
-      case 'droplet_eliminator':
-        return 'Sep. Gotas';
-      case 'mixing_box':
-        return 'Cám. Mezcla';
-      case 'intake_damper':
-        return 'Toma ODA';
-      case 'exhaust_damper':
-        return 'Expulsión EHA';
-      case 'silencer':
-        return 'Silenciador';
-      case 'humidifier':
-        return 'Humidificador';
-      default:
-        return mod.name.split(' ')[0];
+    if (e.touches.length === 1) {
+      const t = e.touches[0];
+      setIsDraggingCanvas(true);
+      touchStartRef.current = {
+        touches: [{ x: t.clientX, y: t.clientY }],
+        distance: 0,
+        initialZoom: transform.zoom,
+        panX: transform.panX,
+        panY: transform.panY,
+      };
+    } else if (e.touches.length === 2) {
+      const t0 = e.touches[0];
+      const t1 = e.touches[1];
+      const dist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+      touchStartRef.current = {
+        touches: [
+          { x: t0.clientX, y: t0.clientY },
+          { x: t1.clientX, y: t1.clientY },
+        ],
+        distance: dist > 0 ? dist : 1,
+        initialZoom: transform.zoom,
+        panX: transform.panX,
+        panY: transform.panY,
+      };
     }
   };
 
-  // Calculate dynamic chassis width based on assembled modules
-  const dynamicChassisWidth = useMemo(() => {
-    if (enabledModules.length === 0) return 400;
-    const totalContentWidth = enabledModules.reduce(
-      (sum, mod) => sum + (moduleWidths[mod.type] || 100) + 10,
-      10
-    );
-    return Math.max(700, totalContentWidth + 30);
-  }, [enabledModules]);
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (e.touches.length === 1 && isDraggingCanvas) {
+      const t = e.touches[0];
+      const dx = t.clientX - touchStartRef.current.touches[0].x;
+      const dy = t.clientY - touchStartRef.current.touches[0].y;
+      const containerWidth = ahuContainerRef.current?.clientWidth || 1000;
+      const svgScale = dynamicSvgViewBoxWidth / containerWidth;
+      const factor = svgScale / transform.zoom;
 
-  // Dynamic SVG ViewBox width
-  const dynamicSvgViewBoxWidth = useMemo(() => {
-    return Math.max(1150, dynamicChassisWidth + 360);
-  }, [dynamicChassisWidth]);
+      const { maxPanX, maxPanY } = getPanBounds(transform.zoom);
+      const targetPanX = touchStartRef.current.panX + dx * factor;
+      const targetPanY = touchStartRef.current.panY + dy * factor;
+
+      const clampedPanX = Math.max(-maxPanX, Math.min(maxPanX, targetPanX));
+      const clampedPanY = Math.max(-maxPanY, Math.min(maxPanY, targetPanY));
+
+      setTransform((prev) => ({
+        ...prev,
+        panX: clampedPanX,
+        panY: clampedPanY,
+      }));
+    } else if (e.touches.length === 2 && touchStartRef.current.distance > 0) {
+      const t0 = e.touches[0];
+      const t1 = e.touches[1];
+      const currentDist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+      const scaleFactor = currentDist / touchStartRef.current.distance;
+      const newZoom = Math.min(
+        3.5,
+        Math.max(0.35, Number((touchStartRef.current.initialZoom * scaleFactor).toFixed(2)))
+      );
+
+      const { maxPanX, maxPanY } = getPanBounds(newZoom);
+      const clampedPanX = Math.max(-maxPanX, Math.min(maxPanX, transform.panX));
+      const clampedPanY = Math.max(-maxPanY, Math.min(maxPanY, transform.panY));
+
+      setTransform({
+        zoom: newZoom,
+        panX: clampedPanX,
+        panY: clampedPanY,
+      });
+    }
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    if (e.touches.length === 0) {
+      setIsDraggingCanvas(false);
+    } else if (e.touches.length === 1) {
+      const t = e.touches[0];
+      touchStartRef.current = {
+        touches: [{ x: t.clientX, y: t.clientY }],
+        distance: 0,
+        initialZoom: transform.zoom,
+        panX: transform.panX,
+        panY: transform.panY,
+      };
+    }
+  };
 
   // Identify active module being edited
   const activeEditingModule = useMemo(() => {
     return modules.find((m) => m.id === editingModuleId) || null;
   }, [modules, editingModuleId]);
 
-  // Total pressure drop
-  const totalPressureDropPa = useMemo(() => {
-    return enabledModules.reduce((acc, m) => acc + (m.pressureDropPa || 0), 0);
-  }, [enabledModules]);
-
   // Identify key points from cycle
   const outdoorPoint =
     points.find((p) => {
       const n = p.name.toLowerCase();
       return n.includes('ext') || n.includes('oa') || n.includes('oda') || n.includes('1');
-    }) || points[0] || solveStatePoint({ mode: 'tdb_rh', tdb: 35, rh: 45 }, pressure);
+    }) || points[0] || solveStatePoint({ mode: 'tdb_rh', tdb: 9.0, rh: 36 }, pressure);
 
-  const supplyPoint =
+  const returnPoint =
     points.find((p) => {
       const n = p.name.toLowerCase();
-      return n.includes('imp') || n.includes('sup') || n.includes('sa') || n.includes('4');
-    }) || points[points.length - 1] || solveStatePoint({ mode: 'tdb_rh', tdb: 15, rh: 85 }, pressure);
+      return n.includes('ret') || n.includes('ra') || n.includes('ida') || n.includes('2');
+    }) || points[1] || solveStatePoint({ mode: 'tdb_rh', tdb: 24.5, rh: 50 }, pressure);
 
-  const roomPoint =
-    points.find((p) => {
-      const n = p.name.toLowerCase();
-      return n.includes('int') || n.includes('ida') || n.includes('ra') || n.includes('loc');
-    }) || solveStatePoint({ mode: 'tdb_rh', tdb: 24, rh: 50 }, pressure);
+  const lastPointsSigRef = useRef<string>('');
+  const isInternalSyncRef = useRef<boolean>(false);
+
+  // Synchronize AHU module train with global StatePoints and Processes
+  const triggerSyncWithModules = (currentModList?: AHUModuleItem[]) => {
+    if (!onUpdatePointsAndProcesses) return;
+    const targetModules = currentModList || modules;
+    const result = computeAHUCycle(targetModules, outdoorPoint, returnPoint, pressure);
+    isInternalSyncRef.current = true;
+    onUpdatePointsAndProcesses(result.newPoints, result.newProcesses);
+    setLastSyncTimestamp(Date.now());
+  };
+
+  // Full sequential thermodynamic results along the AHU
+  const ahuStepResults = useMemo(() => {
+    return computeAHUCycle(modules, outdoorPoint, returnPoint, pressure);
+  }, [modules, outdoorPoint, returnPoint, pressure]);
+
+  const ahuSteps = ahuStepResults.steps;
+  const supplyPoint = ahuStepResults.supplyPoint;
+  const coolingPowerKW = ahuStepResults.coolingPowerKW;
+  const heatingPowerKW = ahuStepResults.heatingPowerKW;
+  const recoveredPowerKW = ahuStepResults.recoveredPowerKW;
+  const condensateLitersPerHour = ahuStepResults.condensateLitersPerHour;
+  const totalPressureDropPa = ahuStepResults.totalPressureDrop;
+
+  // Bidirectional sync: when selectedPointId changes from the left sidebar, highlight the corresponding module in the cut
+  useEffect(() => {
+    if (!selectedPointId) return;
+    const matchedStep = ahuStepResults.steps.find(
+      (s) =>
+        s.associatedPointId === selectedPointId ||
+        s.entryPoint.id === selectedPointId ||
+        s.exitPoint.id === selectedPointId
+    );
+    if (matchedStep) {
+      setEditingModuleId(matchedStep.module.id);
+    }
+  }, [selectedPointId, ahuStepResults.steps]);
+
+  // When outdoor (pt-1) or return (pt-2) points change in the sidebar, propagate along the AHU train
+  useEffect(() => {
+    if (!autoSyncCycle || !onUpdatePointsAndProcesses) return;
+    if (isInternalSyncRef.current) {
+      isInternalSyncRef.current = false;
+      return;
+    }
+    const currentSig = `${points[0]?.tdb.toFixed(2)}_${points[0]?.w.toFixed(5)}_${points[1]?.tdb.toFixed(2)}_${points[1]?.w.toFixed(5)}`;
+    if (lastPointsSigRef.current && lastPointsSigRef.current !== currentSig) {
+      lastPointsSigRef.current = currentSig;
+      triggerSyncWithModules(modules);
+    } else {
+      lastPointsSigRef.current = currentSig;
+    }
+  }, [points, autoSyncCycle]);
+
+  // Auto-fit AHU content to window viewport when view mode or properties detail mode changes
+  useEffect(() => {
+    if (schematicMode === 'ahu_section') {
+      const timer = setTimeout(() => {
+        handleZoomAll();
+      }, 60);
+      return () => clearTimeout(timer);
+    }
+  }, [cutViewMode, propertiesDetailMode, schematicMode, handleZoomAll]);
+
+  // Click handler to select module and point simultaneously
+  const handleSelectModuleAndPoint = (modId: string, ptId?: string) => {
+    setEditingModuleId(modId);
+    if (ptId) {
+      onSelectPoint(ptId);
+    } else {
+      const step = ahuStepResults.steps.find((s) => s.module.id === modId);
+      if (step?.associatedPointId) {
+        onSelectPoint(step.associatedPointId);
+      }
+    }
+  };
 
   // ---------------- MODULE CREATION AND MANAGEMENT ----------------
   const insertModuleAt = (type: AHUModuleType, slotIndex: number) => {
@@ -796,10 +1509,12 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
       params: catalogItem ? { ...catalogItem.defaultParams } : {},
     };
 
+    let updatedList: AHUModuleItem[] = [];
     setModules((prev) => {
       const copy = [...prev];
       const targetPos = Math.min(copy.length, Math.max(0, slotIndex));
       copy.splice(targetPos, 0, newMod);
+      updatedList = copy;
       return copy;
     });
 
@@ -808,7 +1523,7 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
 
     // Sync to cycle if autoSync is active
     if (autoSyncCycle) {
-      setTimeout(() => triggerSyncWithModules(), 50);
+      setTimeout(() => triggerSyncWithModules(updatedList), 30);
     }
   };
 
@@ -822,52 +1537,71 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
       name: `${source.name} (Copia)`,
       params: { ...source.params },
     };
+    let updatedList: AHUModuleItem[] = [];
     setModules((prev) => {
       const copy = [...prev];
       copy.splice(index + 1, 0, duplicate);
+      updatedList = copy;
       return copy;
     });
     setEditingModuleId(duplicate.id);
+    if (autoSyncCycle) {
+      setTimeout(() => triggerSyncWithModules(updatedList), 30);
+    }
   };
 
   const handleMoveModule = (index: number, direction: 'left' | 'right') => {
     const targetIndex = direction === 'left' ? index - 1 : index + 1;
     if (targetIndex < 0 || targetIndex >= modules.length) return;
+    let updatedList: AHUModuleItem[] = [];
     setModules((prev) => {
       const copy = [...prev];
       const item = copy[index];
       copy[index] = copy[targetIndex];
       copy[targetIndex] = item;
+      updatedList = copy;
       return copy;
     });
+    if (autoSyncCycle) {
+      setTimeout(() => triggerSyncWithModules(updatedList), 30);
+    }
   };
 
   const handleRemoveModule = (id: string) => {
-    setModules((prev) => prev.filter((m) => m.id !== id));
+    let updatedList: AHUModuleItem[] = [];
+    setModules((prev) => {
+      const filtered = prev.filter((m) => m.id !== id);
+      updatedList = filtered;
+      return filtered;
+    });
     if (editingModuleId === id) {
       const remaining = modules.filter((m) => m.id !== id);
       setEditingModuleId(remaining.length > 0 ? remaining[0].id : null);
     }
     if (autoSyncCycle) {
-      setTimeout(() => triggerSyncWithModules(), 50);
+      setTimeout(() => triggerSyncWithModules(updatedList), 30);
     }
   };
 
   const handleToggleModule = (id: string) => {
-    setModules((prev) =>
-      prev.map((m) => (m.id === id ? { ...m, enabled: !m.enabled } : m))
-    );
+    let updatedList: AHUModuleItem[] = [];
+    setModules((prev) => {
+      const toggled = prev.map((m) => (m.id === id ? { ...m, enabled: !m.enabled } : m));
+      updatedList = toggled;
+      return toggled;
+    });
     if (autoSyncCycle) {
-      setTimeout(() => triggerSyncWithModules(), 50);
+      setTimeout(() => triggerSyncWithModules(updatedList), 30);
     }
   };
 
   const handleUpdateModuleParams = (id: string, newParams: Partial<AHUModuleItem['params']>) => {
-    setModules((prev) =>
-      prev.map((m) => (m.id === id ? { ...m, params: { ...m.params, ...newParams } } : m))
+    const updated = modules.map((m) =>
+      m.id === id ? { ...m, params: { ...m.params, ...newParams } } : m
     );
+    setModules(updated);
     if (autoSyncCycle) {
-      triggerSyncWithModules();
+      triggerSyncWithModules(updated);
     }
   };
 
@@ -967,225 +1701,10 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
     setHoveredSlotIndex(null);
   };
 
-  // ---------------- PSYCHROMETRIC CYCLE SYNCHRONIZATION ----------------
-  const triggerSyncWithModules = (currentModList?: AHUModuleItem[]) => {
-    if (!onUpdatePointsAndProcesses) return;
-
-    const list = (currentModList || modules).filter((m) => m.enabled);
-    const outdoor = points[0] || solveStatePoint({ mode: 'tdb_rh', tdb: 35, rh: 45 }, pressure);
-    const returnPt = points[1] || solveStatePoint({ mode: 'tdb_rh', tdb: 25, rh: 50 }, pressure);
-
-    let currentPt = outdoor;
-    const newPoints: StatePoint[] = [
-      { ...outdoor, id: 'pt-1', name: '1. Exterior (ODA)' },
-      { ...returnPt, id: 'pt-2', name: '2. Retorno (RA)' },
-    ];
-    const newProcesses: ProcessConnection[] = [];
-    let ptCounter = 3;
-
-    // 1. Mixing box
-    const mixingMod = list.find((m) => m.type === 'mixing_box');
-    const outdoorRatio = mixingMod?.params.outdoorRatio ?? 0.3;
-
-    if (mixingMod) {
-      const tdbMix = outdoorRatio * outdoor.tdb + (1 - outdoorRatio) * returnPt.tdb;
-      const wMix = outdoorRatio * outdoor.w + (1 - outdoorRatio) * returnPt.w;
-      const mixPt = solveStatePoint({ mode: 'tdb_w', tdb: tdbMix, w: wMix }, pressure, {
-        id: `pt-${ptCounter}`,
-        name: `${ptCounter}. Mezcla (MA)`,
-        color: '#F59E0B',
-        volumeFlow: outdoor.volumeFlow || 3000,
-      });
-      newPoints.push(mixPt);
-      newProcesses.push({
-        id: `proc-mix`,
-        name: 'Mezcla ODA + RA',
-        type: 'mixing',
-        fromPointId: 'pt-1',
-        toPointId: mixPt.id,
-        secondaryFromPointId: 'pt-2',
-        mixingRatio: outdoorRatio,
-        color: '#F59E0B',
-        ...calculateProcessMetrics(outdoor, mixPt, outdoor.massFlow),
-      });
-      currentPt = mixPt;
-      ptCounter++;
-    }
-
-    // 2. Heat recovery (if present before coils)
-    const recMod = list.find((m) => m.type === 'heat_recovery');
-    if (recMod) {
-      const eff = recMod.params.recoveryEfficiency ?? 0.75;
-      const tdbRec = currentPt.tdb + eff * (returnPt.tdb - currentPt.tdb);
-      const recPt = solveStatePoint({ mode: 'tdb_w', tdb: tdbRec, w: currentPt.w }, pressure, {
-        id: `pt-${ptCounter}`,
-        name: `${ptCounter}. Post-Recuperador`,
-        color: '#0EA5E9',
-        volumeFlow: currentPt.volumeFlow,
-      });
-      newPoints.push(recPt);
-      newProcesses.push({
-        id: `proc-rec`,
-        name: 'Recuperación de Calor η',
-        type: 'sensible_cooling',
-        fromPointId: currentPt.id,
-        toPointId: recPt.id,
-        color: '#0EA5E9',
-        ...calculateProcessMetrics(currentPt, recPt, currentPt.massFlow),
-      });
-      currentPt = recPt;
-      ptCounter++;
-    }
-
-    // 3. Cooling coil
-    const coolMod = list.find((m) => m.type === 'cooling_coil');
-    if (coolMod) {
-      const exitT = coolMod.params.exitTdb ?? 12.8;
-      const exitRh = coolMod.params.exitRh ?? 95;
-      const coolPt = solveStatePoint({ mode: 'tdb_rh', tdb: exitT, rh: exitRh }, pressure, {
-        id: `pt-${ptCounter}`,
-        name: `${ptCounter}. Batería Fría (CC)`,
-        color: '#38BDF8',
-        volumeFlow: currentPt.volumeFlow,
-      });
-      newPoints.push(coolPt);
-      newProcesses.push({
-        id: `proc-cool`,
-        name: 'Enfriamiento & Deshumectación',
-        type: 'cooling_dehumid',
-        fromPointId: currentPt.id,
-        toPointId: coolPt.id,
-        bypassFactor: coolMod.params.bypassFactor ?? 0.1,
-        color: '#38BDF8',
-        ...calculateProcessMetrics(currentPt, coolPt, currentPt.massFlow),
-      });
-      currentPt = coolPt;
-      ptCounter++;
-    }
-
-    // 4. Heating coil
-    const heatMod = list.find((m) => m.type === 'heating_coil');
-    if (heatMod) {
-      const heatT = heatMod.params.heatingTdb ?? 16.5;
-      const heatPt = solveStatePoint({ mode: 'tdb_w', tdb: heatT, w: currentPt.w }, pressure, {
-        id: `pt-${ptCounter}`,
-        name: `${ptCounter}. Batería Calor (HC)`,
-        color: '#EF4444',
-        volumeFlow: currentPt.volumeFlow,
-      });
-      newPoints.push(heatPt);
-      newProcesses.push({
-        id: `proc-heat`,
-        name: 'Calentamiento Sensible',
-        type: 'sensible_heating',
-        fromPointId: currentPt.id,
-        toPointId: heatPt.id,
-        color: '#EF4444',
-        ...calculateProcessMetrics(currentPt, heatPt, currentPt.massFlow),
-      });
-      currentPt = heatPt;
-      ptCounter++;
-    }
-
-    // 5. Humidifier
-    const humMod = list.find((m) => m.type === 'humidifier');
-    if (humMod) {
-      const targetRh = humMod.params.targetRh ?? 50;
-      const humPt = solveStatePoint({ mode: 'tdb_rh', tdb: currentPt.tdb, rh: targetRh }, pressure, {
-        id: `pt-${ptCounter}`,
-        name: `${ptCounter}. Humidificación`,
-        color: '#A855F7',
-        volumeFlow: currentPt.volumeFlow,
-      });
-      newPoints.push(humPt);
-      newProcesses.push({
-        id: `proc-hum`,
-        name: 'Humidificación de Vapor',
-        type: 'steam_humid',
-        fromPointId: currentPt.id,
-        toPointId: humPt.id,
-        color: '#A855F7',
-        ...calculateProcessMetrics(currentPt, humPt, currentPt.massFlow),
-      });
-      currentPt = humPt;
-      ptCounter++;
-    }
-
-    // 6. Fan temperature rise
-    const fanMod = list.find((m) => m.type === 'fan');
-    const fanRise = fanMod?.params.tempRise ?? 0.8;
-    const supPt = solveStatePoint({ mode: 'tdb_w', tdb: currentPt.tdb + fanRise, w: currentPt.w }, pressure, {
-      id: `pt-${ptCounter}`,
-      name: `${ptCounter}. Impulsión (SUP)`,
-      color: '#06B6D4',
-      volumeFlow: currentPt.volumeFlow,
-    });
-    newPoints.push(supPt);
-    newProcesses.push({
-      id: `proc-fan`,
-      name: 'Salto Ventilador',
-      type: 'sensible_heating',
-      fromPointId: currentPt.id,
-      toPointId: supPt.id,
-      color: '#10B981',
-      ...calculateProcessMetrics(currentPt, supPt, currentPt.massFlow),
-    });
-
-    // 7. Room target point
-    const roomTarget = solveStatePoint({ mode: 'tdb_rh', tdb: 24.5, rh: 50 }, pressure, {
-      id: `pt-${ptCounter + 1}`,
-      name: `${ptCounter + 1}. Zona Interior (IDA)`,
-      color: '#8B5CF6',
-      volumeFlow: currentPt.volumeFlow,
-    });
-    newPoints.push(roomTarget);
-    newProcesses.push({
-      id: `proc-room`,
-      name: 'Carga Térmica del Local (SHR)',
-      type: 'zone_load',
-      fromPointId: supPt.id,
-      toPointId: roomTarget.id,
-      color: '#8B5CF6',
-      ...calculateProcessMetrics(supPt, roomTarget, supPt.massFlow),
-    });
-
-    onUpdatePointsAndProcesses(newPoints, newProcesses);
-    setLastSyncTimestamp(Date.now());
-  };
-
-  // Thermal metrics
-  const coolingProcess = processes.find((p) => p.type === 'cooling_dehumid');
-  const heatingProcess = processes.find((p) => p.type === 'sensible_heating');
-
-  const coolingCoilPoint =
-    points.find((p) => p.name.includes('Fría') || p.name.includes('CC') || p.name.includes('3')) ||
-    solveStatePoint({ mode: 'tdb_rh', tdb: 12.8, rh: 95 }, pressure);
-
-  const mixedPoint =
-    points.find((p) => p.name.includes('Mezcla') || p.name.includes('MA') || p.name.includes('2')) ||
-    solveStatePoint({ mode: 'tdb_rh', tdb: 28, rh: 50 }, pressure);
-
-  const coolingPowerKW = useMemo(() => {
-    if (coolingProcess?.qTotal) return Math.abs(coolingProcess.qTotal);
-    const deltaH = Math.max(0, mixedPoint.h - coolingCoilPoint.h);
-    return (deltaH * (mixedPoint.massFlow || 1.1)) / 1000;
-  }, [coolingProcess, mixedPoint, coolingCoilPoint]);
-
-  const condensateLitersPerHour = useMemo(() => {
-    if (coolingProcess?.moistureExchange) return Math.abs(coolingProcess.moistureExchange);
-    const deltaW = Math.max(0, mixedPoint.w - coolingCoilPoint.w);
-    return deltaW * (mixedPoint.massFlow || 1.1) * 3600;
-  }, [coolingProcess, mixedPoint, coolingCoilPoint]);
-
-  const heatingPowerKW = useMemo(() => {
-    if (heatingProcess?.qSensible) return Math.abs(heatingProcess.qSensible);
-    return 14.5;
-  }, [heatingProcess]);
-
   return (
-    <div className="space-y-4 font-primary">
+    <div className="w-full h-full flex flex-col overflow-y-auto space-y-4 font-primary pr-1 scrollbar-thin">
       {/* ---------------- 1. HEADER & MODE SWITCHER BAR ---------------- */}
-      <div className="panel-glass p-3 flex flex-wrap items-center justify-between gap-3">
+      <div className="panel-glass p-3 flex flex-wrap items-center justify-between gap-3 relative z-40">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-[6px] bg-[#fbbf24] text-black flex items-center justify-center shadow-[0_0_10px_rgba(251,191,36,0.3)]">
             <Wrench className="w-5 h-5" />
@@ -1208,7 +1727,7 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
         {/* View mode toggle & Quick Templates */}
         <div className="flex items-center flex-wrap gap-2">
           {/* Archetypes / Templates Dropdown button */}
-          <div className="relative">
+          <div className="relative" ref={archetypesDropdownRef}>
             <button
               onClick={() => setIsArchetypesOpen(!isArchetypesOpen)}
               className="btn-secondary text-[12px]"
@@ -1219,25 +1738,38 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
             </button>
 
             {isArchetypesOpen && (
-              <div className="absolute right-0 mt-2 w-80 panel-glass p-2 z-50 space-y-1">
-                <div className="px-3 py-1.5 text-[11px] font-bold text-[#cbd5e1] font-mono uppercase tracking-wider border-b border-[rgba(255,255,255,0.1)] flex justify-between items-center">
-                  <span>Arquetipos de UTA</span>
-                  <X className="w-3.5 h-3.5 cursor-pointer text-slate-400 hover:text-white" onClick={() => setIsArchetypesOpen(false)} />
-                </div>
-                {AHU_ARCHETYPES.map((arch) => (
+              <div className="absolute right-0 mt-2 w-92 bg-[#121215] border border-white/20 rounded-xl shadow-[0_25px_60px_rgba(0,0,0,0.95)] backdrop-blur-2xl p-2 z-[100] space-y-1">
+                <div className="px-3 py-2 text-[11px] font-bold text-[#fbbf24] font-mono uppercase tracking-wider border-b border-white/10 flex justify-between items-center bg-black/40 rounded-t-lg">
+                  <span className="flex items-center gap-1.5">
+                    <LayoutTemplate className="w-3.5 h-3.5 text-[#fbbf24]" />
+                    <span>Arquetipos de UTA (Guía IDAE / ATECYR)</span>
+                  </span>
                   <button
-                    key={arch.id}
-                    onClick={() => handleLoadArchetype(arch.id)}
-                    className="w-full text-left p-2 rounded-[6px] hover:bg-[rgba(255,255,255,0.08)] transition-colors group flex flex-col gap-0.5"
+                    onClick={() => setIsArchetypesOpen(false)}
+                    className="p-1 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
                   >
-                    <span className="text-xs font-semibold text-white group-hover:text-[#fbbf24]">
-                      {arch.name}
-                    </span>
-                    <span className="text-[10px] text-[#cbd5e1] line-clamp-2">
-                      {arch.description}
-                    </span>
+                    <X className="w-4 h-4" />
                   </button>
-                ))}
+                </div>
+                <div className="max-h-[60vh] overflow-y-auto space-y-1 pr-1 scrollbar-thin">
+                  {AHU_ARCHETYPES.map((arch) => (
+                    <button
+                      key={arch.id}
+                      onClick={() => handleLoadArchetype(arch.id)}
+                      className="w-full text-left p-2.5 rounded-lg hover:bg-white/10 border border-transparent hover:border-[#fbbf24]/40 transition-all group flex flex-col gap-1 cursor-pointer"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-white group-hover:text-[#fbbf24] transition-colors">
+                          {arch.name}
+                        </span>
+                        <ChevronRight className="w-3.5 h-3.5 text-slate-500 group-hover:text-[#fbbf24] transition-transform group-hover:translate-x-0.5 shrink-0" />
+                      </div>
+                      <span className="text-[11px] text-slate-300 leading-snug line-clamp-2">
+                        {arch.description}
+                      </span>
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
           </div>
@@ -1262,6 +1794,16 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
           >
             <BookOpen className="w-3.5 h-3.5 text-[#fbbf24]" />
             <span>Simbología IDAE</span>
+          </button>
+
+          {/* Anatomía y Esquema Ejemplo UTA button */}
+          <button
+            onClick={() => setIsAhuExampleOpen(true)}
+            className="btn-secondary text-[12px] !border-[#38bdf8]/40 !text-[#38bdf8] hover:!border-[#38bdf8] hover:!bg-[#38bdf8]/10"
+            title="Conoce los componentes y la estructura principal de una UTA (Infografía didáctica)"
+          >
+            <Info className="w-3.5 h-3.5 text-[#38bdf8]" />
+            <span>Anatomía UTA</span>
           </button>
 
           {/* Theme switcher: IDAE White (authentic guide technical drawing) vs Dark Blueprint */}
@@ -1335,19 +1877,24 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
 
       {/* ---------------- 2. DRAGGABLE COMPONENT PALETTE (PALETA DE COMPONENTES) ---------------- */}
       {schematicMode === 'ahu_section' && (
-        <div className="panel-glass p-3 space-y-2">
+        <div className="panel-glass p-3 space-y-2 relative z-10">
           <div className="flex items-center justify-between text-xs">
             <span className="font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
               <GripVertical className="w-4 h-4 text-[#fbbf24]" />
               <span>Paleta de Módulos (Arrastra a la UTA o pulsa '+' para añadir):</span>
             </span>
-            <div className="flex items-center gap-3">
-              <span className="text-[11px] text-[#cbd5e1] font-mono hidden md:inline">
-                Arrastra cualquier sección directamente sobre el corte longitudinal
-              </span>
+            <div className="flex items-center gap-2.5">
+              <button
+                onClick={() => setIsAhuExampleOpen(true)}
+                className="text-[11px] font-mono text-[#38bdf8] hover:text-[#7dd3fc] flex items-center gap-1.5 bg-[#38bdf8]/10 hover:bg-[#38bdf8]/20 px-2.5 py-1 rounded border border-[#38bdf8]/30 transition-all cursor-pointer shadow-sm"
+                title="Ver infografía con los componentes principales que componen una UTA"
+              >
+                <Info className="w-3.5 h-3.5 text-[#38bdf8]" />
+                <span>¿Cómo se compone una UTA? (Ejemplo)</span>
+              </button>
               <button
                 onClick={() => handleLoadArchetype('empty_canvas')}
-                className="text-[11px] font-mono text-[#fca5a5] hover:text-[#ef4444] flex items-center gap-1"
+                className="text-[11px] font-mono text-[#fca5a5] hover:text-[#ef4444] flex items-center gap-1 px-2 py-1 rounded hover:bg-white/5"
                 title="Vaciar la UTA para montar desde cero"
               >
                 <Trash2 className="w-3 h-3" />
@@ -1356,14 +1903,15 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-2 overflow-x-auto pb-1 pt-0.5 scrollbar-thin">
+          <div className="flex items-center gap-2 overflow-x-auto pb-1 pt-0.5 scrollbar-thin touch-pan-x">
             {MODULE_CATALOG.map((cat) => (
               <div
                 key={cat.type}
                 draggable={true}
                 onDragStart={(e) => handlePaletteDragStart(e, cat.type)}
-                className="shrink-0 flex items-center gap-2 px-3 py-2 rounded-[6px] bg-[#1a1a1c] hover:bg-[rgba(255,255,255,0.08)] border border-[rgba(255,255,255,0.12)] hover:border-[#fbbf24] cursor-grab active:cursor-grabbing transition-all shadow-[0_4px_6px_rgba(0,0,0,0.3)] group select-none relative hover:scale-[1.02]"
-                title={`${cat.title}: ${cat.description}\n(Arrastra a la posición deseada en el corte)`}
+                onClick={() => insertModuleAt(cat.type, enabledModules.length)}
+                className="shrink-0 flex items-center gap-2 px-3 py-2 rounded-[6px] bg-[#1a1a1c] hover:bg-[rgba(255,255,255,0.08)] border border-[rgba(255,255,255,0.12)] hover:border-[#fbbf24] cursor-pointer active:scale-95 touch-manipulation transition-all shadow-[0_4px_6px_rgba(0,0,0,0.3)] group select-none relative hover:scale-[1.02]"
+                title={`${cat.title}: ${cat.description}\n(Toca para añadir o arrastra a la posición deseada en el corte)`}
               >
                 <GripVertical className="w-3.5 h-3.5 text-slate-500 group-hover:text-[#fbbf24] shrink-0" />
                 <span
@@ -1448,6 +1996,49 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
               </div>
             )}
 
+            {/* Properties Detail Mode Segmented Selector */}
+            <div className="flex items-center bg-slate-950/90 backdrop-blur-md p-1 rounded-xl border border-slate-700/80 shadow-lg text-xs">
+              <div className="flex items-center gap-1 px-2 py-0.5 text-slate-400 font-mono text-[11px] font-semibold border-r border-slate-800 mr-1">
+                <Activity className="w-3.5 h-3.5 text-cyan-400" />
+                <span className="hidden sm:inline">Puntos:</span>
+              </div>
+              <div className="flex items-center gap-0.5">
+                <button
+                  onClick={() => setPropertiesDetailMode('full')}
+                  className={`px-2 py-1 rounded-lg text-xs font-mono font-semibold transition-colors ${
+                    propertiesDetailMode === 'full'
+                      ? 'bg-cyan-950/90 text-cyan-300 border border-cyan-500/50 shadow-sm'
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                  }`}
+                  title="Ficha técnica detallada con todas las modificaciones en cada cambio de sección (%HR, T, w, h, ΔT, ΔHR, ΔP, Q)"
+                >
+                  Detalle
+                </button>
+                <button
+                  onClick={() => setPropertiesDetailMode('compact')}
+                  className={`px-2 py-1 rounded-lg text-xs font-mono font-semibold transition-colors ${
+                    propertiesDetailMode === 'compact'
+                      ? 'bg-cyan-950/90 text-cyan-300 border border-cyan-500/50 shadow-sm'
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                  }`}
+                  title="Píldoras compactas con T y %HR en cada junta intermedia"
+                >
+                  Píldoras
+                </button>
+                <button
+                  onClick={() => setPropertiesDetailMode('hover')}
+                  className={`px-2 py-1 rounded-lg text-xs font-mono font-semibold transition-colors ${
+                    propertiesDetailMode === 'hover'
+                      ? 'bg-cyan-950/90 text-cyan-300 border border-cyan-500/50 shadow-sm'
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                  }`}
+                  title="Pines numerados discretos y HUD flotante al pasar el cursor"
+                >
+                  Flotante
+                </button>
+              </div>
+            </div>
+
             {/* Navigation HUD */}
             <div className="flex items-center gap-1 bg-slate-950/90 backdrop-blur-md px-2 py-1.5 rounded-xl border border-slate-700/80 shadow-lg">
               <button
@@ -1475,7 +2066,7 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
               <button
                 onClick={handleZoomAll}
                 className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold text-amber-300 bg-amber-950/40 border border-amber-800/40 hover:bg-amber-900/50 hover:text-white transition-colors"
-                title="Ajustar Todo a la Pantalla"
+                title="Ajustar Todo al Contenido de la Ventana"
               >
                 <Maximize2 className="w-3.5 h-3.5 text-amber-400" />
                 <span>Ajustar Todo</span>
@@ -1511,11 +2102,24 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
             onMouseLeave={handleMouseUp}
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
+            onTouchCancel={handleTouchEnd}
             onDoubleClick={handleZoomAll}
-            className={`w-full relative overflow-hidden rounded-xl bg-slate-950/70 border transition-all flex items-center justify-center select-none ${
-              cutViewMode === 'dual' ? 'min-h-[640px] h-[660px]' : 'min-h-[480px] h-[520px]'
+            style={{ touchAction: 'none' }}
+            className={`w-full relative overflow-hidden rounded-xl touch-none ${
+              isWhiteTheme ? 'bg-slate-100/90 border-slate-300' : 'bg-slate-950/70 border-slate-800/80'
+            } border transition-all flex items-center justify-center select-none ${
+              cutViewMode === 'dual'
+                ? 'min-h-[620px] h-[670px]'
+                : propertiesDetailMode === 'full'
+                ? 'min-h-[480px] h-[520px]'
+                : propertiesDetailMode === 'compact'
+                ? 'min-h-[420px] h-[460px]'
+                : 'min-h-[390px] h-[420px]'
             } ${
-              isOverAhu ? 'border-cyan-400 ring-2 ring-cyan-500/40 shadow-2xl shadow-cyan-500/20' : 'border-slate-800/80'
+              isOverAhu ? 'border-cyan-400 ring-2 ring-cyan-500/40 shadow-2xl shadow-cyan-500/20' : ''
             } ${isDraggingCanvas ? 'cursor-grabbing' : 'cursor-grab'}`}
           >
             {/* Visual Drag & Drop Active Banner */}
@@ -1523,7 +2127,7 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
               <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-cyan-950/95 text-cyan-300 border border-cyan-400 px-5 py-2 rounded-full text-xs font-mono font-bold shadow-2xl pointer-events-none flex items-center gap-2 animate-pulse">
                 <Plus className="w-4 h-4 text-cyan-400" />
                 <span>
-                  Soltar para insertar en la posición #{hoveredSlotIndex !== null ? hoveredSlotIndex + 1 : 'final'}
+                  Soltar para insertar o reordenar en la posición #{hoveredSlotIndex !== null ? hoveredSlotIndex + 1 : 'final'}
                 </span>
               </div>
             )}
@@ -1542,616 +2146,62 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
                 </div>
                 <div className="flex flex-wrap gap-2 pt-2 justify-center">
                   <button
-                    onClick={() => handleLoadArchetype('idae_fig1_belt_fan')}
-                    className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-[#fbbf24] text-slate-950 hover:bg-[#f59e0b] transition-colors shadow-lg shadow-amber-500/20 flex items-center gap-1.5"
+                    onClick={() => handleLoadArchetype('idae_fig2_superior')}
+                    className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-[#10b981] text-slate-950 hover:bg-[#059669] transition-colors shadow-lg shadow-emerald-500/20 flex items-center gap-1.5 cursor-pointer"
                   >
                     <Plus className="w-4 h-4" />
-                    <span>UTA Fig. 1 Correas (Pág. 16)</span>
+                    <span>Fig. 2 Superior (Sin Baterías - 1,3 m)</span>
                   </button>
                   <button
-                    onClick={() => handleLoadArchetype('idae_fig2_direct_fan')}
-                    className="px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 text-white hover:bg-slate-700 transition-colors border border-slate-700"
+                    onClick={() => handleLoadArchetype('idae_fig2_inferior')}
+                    className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-[#38bdf8] text-slate-950 hover:bg-[#0284c7] transition-colors shadow-lg shadow-cyan-500/20 flex items-center gap-1.5 cursor-pointer"
                   >
-                    <span>UTA Fig. 2 Directa</span>
+                    <Plus className="w-4 h-4" />
+                    <span>Fig. 2 Inferior (Con Baterías - 2,1 m)</span>
                   </button>
                   <button
-                    onClick={() => handleLoadArchetype('idae_pag18_flat_105')}
-                    className="px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-rose-950 text-rose-200 border border-rose-800 hover:bg-rose-900 transition-colors"
+                    onClick={() => handleLoadArchetype('idae_fig1_belt_fan')}
+                    className="px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 text-white hover:bg-slate-700 transition-colors border border-slate-700 cursor-pointer"
                   >
-                    <span>UTA 1,05 m Compacta</span>
+                    <span>UTA Fig. 1 Correas</span>
                   </button>
                 </div>
               </div>
             )}
 
-            <svg
-              viewBox={`0 0 ${dynamicSvgViewBoxWidth} ${cutViewMode === 'dual' ? 620 : 440}`}
-              className="w-full h-full drop-shadow-2xl overflow-visible"
-              preserveAspectRatio="xMidYMid meet"
-            >
-              <defs>
-                <linearGradient id="ahuAirGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-                  <stop offset="0%" stopColor="#10B981" stopOpacity="0.8" />
-                  <stop offset="50%" stopColor="#38BDF8" stopOpacity="0.8" />
-                  <stop offset="100%" stopColor="#06B6D4" stopOpacity="0.8" />
-                </linearGradient>
-                <filter id="glowDrop" x="-20%" y="-20%" width="140%" height="140%">
-                  <feGaussianBlur stdDeviation="3" result="blur" />
-                  <feComposite in="SourceGraphic" in2="blur" operator="over" />
-                </filter>
-              </defs>
-
-              {/* Centered pan/zoom group */}
-              <g
-                transform={`translate(${dynamicSvgViewBoxWidth / 2 + transform.panX}, ${
-                  (cutViewMode === 'dual' ? 310 : 220) + transform.panY
-                }) scale(${transform.zoom}) translate(${-dynamicSvgViewBoxWidth / 2}, ${
-                  cutViewMode === 'dual' ? -310 : -220
-                })`}
-                className="transition-transform duration-75"
-              >
-                {/* Background Plate */}
-                <rect
-                  x="10"
-                  y="10"
-                  width={dynamicSvgViewBoxWidth - 20}
-                  height={cutViewMode === 'dual' ? 600 : 420}
-                  rx="14"
-                  fill="#090D16"
-                  stroke={isOverAhu ? '#0284C7' : '#1E293B'}
-                  strokeWidth={isOverAhu ? '2.5' : '1.5'}
-                />
-
-                {/* Canvas header title */}
-                <text
-                  x={dynamicSvgViewBoxWidth / 2}
-                  y="34"
-                  textAnchor="middle"
-                  fill="#64748B"
-                  fontSize="11"
-                  fontWeight="bold"
-                  fontFamily="JetBrains Mono"
-                  letterSpacing="1.5"
-                >
-                  {cutViewMode === 'elevation'
-                    ? 'CORTE LONGITUDINAL UTA EN ALZADO · SIMBOLOGÍA GUÍA TÉCNICA IDAE (FIGURAS 1 Y 2)'
-                    : cutViewMode === 'plan'
-                    ? 'CORTE LONGITUDINAL UTA EN PLANTA / VISTA SUPERIOR (PÁGINAS 17 Y 18 GUÍA IDAE)'
-                    : 'CORTE LONGITUDINAL UTA · VISTA DUAL ALZADO & PLANTA NORMALIZADA GUÍA IDAE'}
-                </text>
-
-                {/* Air Intake arrows: Aire Exterior (ODA) */}
-                <g transform={`translate(35, ${cutViewMode === 'dual' ? 120 : 110})`}>
-                  <text x="35" y="-15" textAnchor="middle" fill="#E2E8F0" fontSize="12" fontWeight="bold" fontFamily="Plus Jakarta Sans">
-                    Aire exterior (ODA)
-                  </text>
-                  <g
-                    transform="translate(35, 110)"
-                    className="cursor-pointer"
-                    onClick={() => onSelectPoint(outdoorPoint.id)}
-                  >
-                    <rect x="-45" y="-12" width="90" height="24" rx="6" fill="#0B132B" stroke="#EF4444" strokeWidth="1.5" />
-                    <text x="0" y="4" textAnchor="middle" fill="#FCA5A5" fontSize="10" fontWeight="bold" fontFamily="JetBrains Mono">
-                      {outdoorPoint.tdb.toFixed(1)}°C | {outdoorPoint.rh.toFixed(0)}%
-                    </text>
-                  </g>
-                  {[0, 16, 32, 48, 64].map((dy, i) => (
-                    <g key={`arrow-in-${i}`} transform={`translate(0, ${dy})`}>
-                      <line x1="0" y1="0" x2="65" y2="0" stroke="#10B981" strokeWidth="3" strokeLinecap="round" />
-                      <polygon points="65,0 55,-4 57,0 55,4" fill="#10B981" />
-                    </g>
-                  ))}
-                </g>
-
-                {/* ---------------- TRAIN 1: ELEVATION (OR ACTIVE VIEW) ---------------- */}
-                <g transform={`translate(145, ${cutViewMode === 'dual' ? 55 : 55})`}>
-                  {cutViewMode === 'dual' && (
-                    <text
-                      x="10"
-                      y="-16"
-                      fill="#38BDF8"
-                      fontSize="10"
-                      fontWeight="bold"
-                      fontFamily="JetBrains Mono"
-                      letterSpacing="1"
-                    >
-                      ▲ ALZADO (CORTE LONGITUDINAL)
-                    </text>
-                  )}
-
-                  {/* Chassis mounting legs with antivibration blocks */}
-                  {[30, Math.floor(dynamicChassisWidth * 0.35), Math.floor(dynamicChassisWidth * 0.7), dynamicChassisWidth - 40].map((lx, i) => (
-                    <g key={`leg-${i}`} transform={`translate(${lx}, 200)`}>
-                      <rect x="0" y="0" width="22" height="26" fill="#1E293B" stroke="#475569" strokeWidth="1.5" rx="2" />
-                      <rect x="-6" y="22" width="34" height="7" fill="#0F172A" stroke="#334155" strokeWidth="1.5" rx="2" />
-                      <circle cx="11" cy="12" r="3" fill="#64748B" />
-                    </g>
-                  ))}
-
-                  {/* Outer double-wall insulated metal casing (sandwich panel) */}
-                  <rect x="0" y="0" width={dynamicChassisWidth} height="200" fill="#0B132B" stroke="#334155" strokeWidth="4" rx="6" />
-                  <rect x="4" y="4" width={dynamicChassisWidth - 8} height="192" fill="#070B14" stroke="#1E293B" strokeWidth="2" />
-
-                  {/* Insertion drop guides */}
-                  {isOverAhu && (
-                    <g className="insertion-guides">
-                      {(() => {
-                        let runningX = 10;
-                        const slots = [runningX];
-                        enabledModules.forEach((m) => {
-                          runningX += (moduleWidths[m.type] || 100) + 10;
-                          slots.push(runningX);
-                        });
-
-                        return slots.map((sx, sIdx) => {
-                          const isHovered = hoveredSlotIndex === sIdx;
-                          return (
-                            <g key={`drop-slot-${sIdx}`} transform={`translate(${sx - 5}, 10)`}>
-                              <rect
-                                x="0"
-                                y="0"
-                                width="10"
-                                height="180"
-                                rx="2"
-                                fill={isHovered ? '#38BDF8' : '#0284C7'}
-                                opacity={isHovered ? 0.9 : 0.4}
-                                stroke="#38BDF8"
-                                strokeDasharray="4,3"
-                              />
-                              {isHovered && (
-                                <g transform="translate(5, 90)">
-                                  <circle cx="0" cy="0" r="14" fill="#0284C7" stroke="#38BDF8" strokeWidth="2" />
-                                  <text x="0" y="4" textAnchor="middle" fill="#FFFFFF" fontSize="12" fontWeight="bold">
-                                    +
-                                  </text>
-                                </g>
-                              )}
-                            </g>
-                          );
-                        });
-                      })()}
-                    </g>
-                  )}
-
-                  {/* Modules loop */}
-                  {(() => {
-                    let currentOffset = 10;
-                    return enabledModules.map((mod, index) => {
-                      const modWidth = moduleWidths[mod.type] || 100;
-                      const modX = currentOffset;
-                      currentOffset += modWidth + 10;
-                      const isModActive = editingModuleId === mod.id;
-
-                      return (
-                        <g
-                          key={mod.id}
-                          transform={`translate(${modX}, 10)`}
-                          className="cursor-pointer group"
-                          onClick={() => setEditingModuleId(mod.id)}
-                        >
-                          {/* Module casing */}
-                          <rect
-                            x="0"
-                            y="0"
-                            width={modWidth}
-                            height="180"
-                            rx="4"
-                            fill={
-                              isModActive
-                                ? isWhiteTheme
-                                  ? '#E0F2FE'
-                                  : '#1E293B'
-                                : isWhiteTheme
-                                ? '#FFFFFF'
-                                : '#070B14'
-                            }
-                            stroke={
-                              isModActive
-                                ? '#0284C7'
-                                : isWhiteTheme
-                                ? '#CBD5E1'
-                                : '#334155'
-                            }
-                            strokeWidth={isModActive ? '3' : '1.5'}
-                            filter={isModActive && !isWhiteTheme ? 'url(#glowDrop)' : undefined}
-                          />
-
-                          {/* Quick reorder buttons */}
-                          <g transform="translate(4, 6)" className="opacity-60 group-hover:opacity-100 transition-opacity">
-                            {index > 0 && (
-                              <g
-                                transform="translate(0, 0)"
-                                className="cursor-pointer"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleMoveModule(index, 'left');
-                                }}
-                              >
-                                <circle cx="7" cy="7" r="7" fill={isWhiteTheme ? '#E2E8F0' : '#334155'} />
-                                <text x="7" y="10" textAnchor="middle" fill={isWhiteTheme ? '#0F172A' : '#E2E8F0'} fontSize="8" fontWeight="bold">◀</text>
-                              </g>
-                            )}
-                            {index < enabledModules.length - 1 && (
-                              <g
-                                transform="translate(18, 0)"
-                                className="cursor-pointer"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleMoveModule(index, 'right');
-                                }}
-                              >
-                                <circle cx="7" cy="7" r="7" fill={isWhiteTheme ? '#E2E8F0' : '#334155'} />
-                                <text x="7" y="10" textAnchor="middle" fill={isWhiteTheme ? '#0F172A' : '#E2E8F0'} fontSize="8" fontWeight="bold">▶</text>
-                              </g>
-                            )}
-                          </g>
-
-                          {/* Delete button */}
-                          <g
-                            transform={`translate(${modWidth - 18}, 6)`}
-                            className="opacity-70 group-hover:opacity-100 cursor-pointer"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleRemoveModule(mod.id);
-                            }}
-                          >
-                            <circle cx="7" cy="7" r="7" fill="#EF4444" />
-                            <text x="7" y="10" textAnchor="middle" fill="#FFFFFF" fontSize="9" fontWeight="bold">✕</text>
-                          </g>
-
-                          {/* Official IDAE Section Symbol */}
-                          <IDAESectionSymbol
-                            mod={mod}
-                            modWidth={modWidth}
-                            isFlowActive={isFlowActive}
-                            isWhiteTheme={isWhiteTheme}
-                            viewMode={cutViewMode === 'plan' ? 'plan' : 'elevation'}
-                          />
-
-                          {/* Authentic IDAE Title on top of module */}
-                          <text
-                            x={modWidth / 2}
-                            y="-14"
-                            textAnchor="middle"
-                            fill={isWhiteTheme ? '#0F172A' : '#E2E8F0'}
-                            fontSize="11"
-                            fontWeight="bold"
-                            fontFamily="Plus Jakarta Sans"
-                          >
-                            {getIdaeModuleTitle(mod)}
-                          </text>
-
-                          {/* Technical parameter subscript below module */}
-                          <text
-                            x={modWidth / 2}
-                            y="196"
-                            textAnchor="middle"
-                            fill={isWhiteTheme ? '#475569' : '#94A3B8'}
-                            fontSize="9"
-                            fontFamily="JetBrains Mono"
-                          >
-                            {mod.params.filterClass ||
-                              (mod.type === 'cooling_coil'
-                                ? `${mod.params.exitTdb}°C`
-                                : mod.type === 'heating_coil'
-                                ? `${mod.params.heatingTdb}°C`
-                                : `${mod.pressureDropPa} Pa`)}
-                          </text>
-                        </g>
-                      );
-                    });
-                  })()}
-
-                  {/* Single view technical dimension chain (Líneas de cotas IDAE Pág. 17-18) */}
-                  {cutViewMode !== 'dual' && (
-                    <>
-                      {/* Individual module dimensions in magenta (#E11D48) */}
-                      <g transform="translate(0, 218)">
-                        {(() => {
-                          let currentX = 10;
-                          return enabledModules.map((mod, idx) => {
-                            const w = moduleWidths[mod.type] || 100;
-                            const xStart = currentX;
-                            const xEnd = currentX + w;
-                            const xMid = currentX + w / 2;
-                            const dimMeters = (moduleDimensionsMeters[mod.type] || 0.4).toFixed(2).replace('.', ',');
-                            currentX += w + 10;
-
-                            return (
-                              <g key={`dim-mod-${mod.id}-${idx}`}>
-                                <line x1={xStart} y1="-10" x2={xStart} y2="10" stroke="#E11D48" strokeWidth="1.2" />
-                                <line x1={xEnd} y1="-10" x2={xEnd} y2="10" stroke="#E11D48" strokeWidth="1.2" />
-                                <line x1={xStart} y1="0" x2={xEnd} y2="0" stroke="#E11D48" strokeWidth="1.2" />
-                                <polygon points={`${xStart},0 ${xStart + 5},-3 ${xStart + 5},3`} fill="#E11D48" />
-                                <polygon points={`${xEnd},0 ${xEnd - 5},-3 ${xEnd - 5},3`} fill="#E11D48" />
-                                <rect
-                                  x={xMid - 16}
-                                  y="-7"
-                                  width="32"
-                                  height="14"
-                                  fill={isWhiteTheme ? '#FFFFFF' : '#070B14'}
-                                  rx="2"
-                                />
-                                <text
-                                  x={xMid}
-                                  y="3"
-                                  textAnchor="middle"
-                                  fill="#E11D48"
-                                  fontSize="9.5"
-                                  fontWeight="bold"
-                                  fontFamily="JetBrains Mono"
-                                >
-                                  {dimMeters}
-                                </text>
-                              </g>
-                            );
-                          });
-                        })()}
-
-                        {/* Overall Total Length Dimension */}
-                        <g transform="translate(0, 24)">
-                          <line x1="10" y1="-8" x2="10" y2="8" stroke={isWhiteTheme ? '#0F172A' : '#E2E8F0'} strokeWidth="1.5" />
-                          <line
-                            x1={dynamicChassisWidth - 10}
-                            y1="-8"
-                            x2={dynamicChassisWidth - 10}
-                            y2="8"
-                            stroke={isWhiteTheme ? '#0F172A' : '#E2E8F0'}
-                            strokeWidth="1.5"
-                          />
-                          <line
-                            x1="10"
-                            y1="0"
-                            x2={dynamicChassisWidth - 10}
-                            y2="0"
-                            stroke={isWhiteTheme ? '#0F172A' : '#E2E8F0'}
-                            strokeWidth="1.5"
-                          />
-                          <polygon points={`10,0 17,-3.5 17,3.5`} fill={isWhiteTheme ? '#0F172A' : '#E2E8F0'} />
-                          <polygon
-                            points={`${dynamicChassisWidth - 10},0 ${dynamicChassisWidth - 17},-3.5 ${dynamicChassisWidth - 17},3.5`}
-                            fill={isWhiteTheme ? '#0F172A' : '#E2E8F0'}
-                          />
-                          <rect
-                            x={dynamicChassisWidth / 2 - 85}
-                            y="-9"
-                            width="170"
-                            height="18"
-                            fill={isWhiteTheme ? '#FFFFFF' : '#070B14'}
-                            rx="3"
-                          />
-                          <text
-                            x={dynamicChassisWidth / 2}
-                            y="4"
-                            textAnchor="middle"
-                            fill={isWhiteTheme ? '#0F172A' : '#F8FAFC'}
-                            fontSize="10.5"
-                            fontWeight="bold"
-                            fontFamily="JetBrains Mono"
-                          >
-                            Longitud Total: {totalLengthMeters.toFixed(2).replace('.', ',')} m
-                          </text>
-                        </g>
-                      </g>
-
-                      {/* Vertical Height Dimension on Left (Cota vertical 0,42 / 0,62 m - Pág. 17) */}
-                      <g transform="translate(-24, 0)">
-                        <line x1="-8" y1="10" x2="8" y2="10" stroke="#059669" strokeWidth="1.5" />
-                        <line x1="-8" y1="190" x2="8" y2="190" stroke="#059669" strokeWidth="1.5" />
-                        <line x1="0" y1="10" x2="0" y2="190" stroke="#059669" strokeWidth="1.5" />
-                        <polygon points="0,10 -3,16 3,16" fill="#059669" />
-                        <polygon points="0,190 -3,184 3,184" fill="#059669" />
-                        <rect
-                          x="-32"
-                          y="90"
-                          width="64"
-                          height="18"
-                          fill={isWhiteTheme ? '#FFFFFF' : '#070B14'}
-                          rx="3"
-                        />
-                        <text
-                          x="0"
-                          y="103"
-                          textAnchor="middle"
-                          fill="#059669"
-                          fontSize="9.5"
-                          fontWeight="bold"
-                          fontFamily="JetBrains Mono"
-                          transform="rotate(-90, 0, 103)"
-                        >
-                          0,62 / 0,42 m
-                        </text>
-                      </g>
-                    </>
-                  )}
-                </g>
-
-                {/* ---------------- TRAIN 2: PLAN VIEW (WHEN IN DUAL MODE PÁG. 17-18) ---------------- */}
-                {cutViewMode === 'dual' && (
-                  <g transform="translate(145, 305)">
-                    <text
-                      x="10"
-                      y="-16"
-                      fill="#10B981"
-                      fontSize="10"
-                      fontWeight="bold"
-                      fontFamily="JetBrains Mono"
-                      letterSpacing="1"
-                    >
-                      ▼ PLANTA (VISTA SUPERIOR NORMALIZADA PÁG. 17-18 IDAE)
-                    </text>
-
-                    {/* Outer double-wall casing */}
-                    <rect x="0" y="0" width={dynamicChassisWidth} height="200" fill="#0B132B" stroke="#334155" strokeWidth="4" rx="6" />
-                    <rect x="4" y="4" width={dynamicChassisWidth - 8} height="192" fill="#070B14" stroke="#1E293B" strokeWidth="2" />
-
-                    {/* Modules in Plan View */}
-                    {(() => {
-                      let currentOffset = 10;
-                      return enabledModules.map((mod) => {
-                        const modWidth = moduleWidths[mod.type] || 100;
-                        const modX = currentOffset;
-                        currentOffset += modWidth + 10;
-                        const isModActive = editingModuleId === mod.id;
-
-                        return (
-                          <g
-                            key={`plan-${mod.id}`}
-                            transform={`translate(${modX}, 10)`}
-                            className="cursor-pointer"
-                            onClick={() => setEditingModuleId(mod.id)}
-                          >
-                            <rect
-                              x="0"
-                              y="0"
-                              width={modWidth}
-                              height="180"
-                              rx="4"
-                              fill={
-                                isModActive
-                                  ? isWhiteTheme
-                                    ? '#E0F2FE'
-                                    : '#1E293B'
-                                  : isWhiteTheme
-                                  ? '#FFFFFF'
-                                  : '#070B14'
-                              }
-                              stroke={
-                                isModActive
-                                  ? '#0284C7'
-                                  : isWhiteTheme
-                                  ? '#CBD5E1'
-                                  : '#334155'
-                              }
-                              strokeWidth={isModActive ? '2.5' : '1.2'}
-                            />
-                            <IDAESectionSymbol
-                              mod={mod}
-                              modWidth={modWidth}
-                              isFlowActive={isFlowActive}
-                              isWhiteTheme={isWhiteTheme}
-                              viewMode="plan"
-                            />
-                          </g>
-                        );
-                      });
-                    })()}
-
-                    {/* Dual Mode Dimension Lines */}
-                    <g transform="translate(0, 218)">
-                      {(() => {
-                        let currentX = 10;
-                        return enabledModules.map((mod, idx) => {
-                          const w = moduleWidths[mod.type] || 100;
-                          const xStart = currentX;
-                          const xEnd = currentX + w;
-                          const xMid = currentX + w / 2;
-                          const dimMeters = (moduleDimensionsMeters[mod.type] || 0.4).toFixed(2).replace('.', ',');
-                          currentX += w + 10;
-
-                          return (
-                            <g key={`dim-plan-mod-${mod.id}-${idx}`}>
-                              <line x1={xStart} y1="-10" x2={xStart} y2="10" stroke="#E11D48" strokeWidth="1.2" />
-                              <line x1={xEnd} y1="-10" x2={xEnd} y2="10" stroke="#E11D48" strokeWidth="1.2" />
-                              <line x1={xStart} y1="0" x2={xEnd} y2="0" stroke="#E11D48" strokeWidth="1.2" />
-                              <polygon points={`${xStart},0 ${xStart + 5},-3 ${xStart + 5},3`} fill="#E11D48" />
-                              <polygon points={`${xEnd},0 ${xEnd - 5},-3 ${xEnd - 5},3`} fill="#E11D48" />
-                              <rect
-                                x={xMid - 16}
-                                y="-7"
-                                width="32"
-                                height="14"
-                                fill={isWhiteTheme ? '#FFFFFF' : '#070B14'}
-                                rx="2"
-                              />
-                              <text
-                                x={xMid}
-                                y="3"
-                                textAnchor="middle"
-                                fill="#E11D48"
-                                fontSize="9.5"
-                                fontWeight="bold"
-                                fontFamily="JetBrains Mono"
-                              >
-                                {dimMeters}
-                              </text>
-                            </g>
-                          );
-                        });
-                      })()}
-
-                      {/* Dual Total Length */}
-                      <g transform="translate(0, 24)">
-                        <line x1="10" y1="-8" x2="10" y2="8" stroke={isWhiteTheme ? '#0F172A' : '#E2E8F0'} strokeWidth="1.5" />
-                        <line
-                          x1={dynamicChassisWidth - 10}
-                          y1="-8"
-                          x2={dynamicChassisWidth - 10}
-                          y2="8"
-                          stroke={isWhiteTheme ? '#0F172A' : '#E2E8F0'}
-                          strokeWidth="1.5"
-                        />
-                        <line
-                          x1="10"
-                          y1="0"
-                          x2={dynamicChassisWidth - 10}
-                          y2="0"
-                          stroke={isWhiteTheme ? '#0F172A' : '#E2E8F0'}
-                          strokeWidth="1.5"
-                        />
-                        <polygon points={`10,0 17,-3.5 17,3.5`} fill={isWhiteTheme ? '#0F172A' : '#E2E8F0'} />
-                        <polygon
-                          points={`${dynamicChassisWidth - 10},0 ${dynamicChassisWidth - 17},-3.5 ${dynamicChassisWidth - 17},3.5`}
-                          fill={isWhiteTheme ? '#0F172A' : '#E2E8F0'}
-                        />
-                        <rect
-                          x={dynamicChassisWidth / 2 - 85}
-                          y="-9"
-                          width="170"
-                          height="18"
-                          fill={isWhiteTheme ? '#FFFFFF' : '#070B14'}
-                          rx="3"
-                        />
-                        <text
-                          x={dynamicChassisWidth / 2}
-                          y="4"
-                          textAnchor="middle"
-                          fill={isWhiteTheme ? '#0F172A' : '#F8FAFC'}
-                          fontSize="10.5"
-                          fontWeight="bold"
-                          fontFamily="JetBrains Mono"
-                        >
-                          Longitud Total: {totalLengthMeters.toFixed(2).replace('.', ',')} m
-                        </text>
-                      </g>
-                    </g>
-                  </g>
-                )}
-
-                {/* Air Outlet arrows: Aire Impulsado (SUP) */}
-                <g transform={`translate(${160 + dynamicChassisWidth + 25}, ${cutViewMode === 'dual' ? 120 : 110})`}>
-                  <text x="45" y="-15" textAnchor="middle" fill="#E2E8F0" fontSize="12" fontWeight="bold" fontFamily="Plus Jakarta Sans">
-                    Aire Impulsado (SUP)
-                  </text>
-                  <g
-                    transform="translate(45, 110)"
-                    className="cursor-pointer"
-                    onClick={() => onSelectPoint(supplyPoint.id)}
-                  >
-                    <rect x="-45" y="-12" width="90" height="24" rx="6" fill="#0B132B" stroke="#06B6D4" strokeWidth="1.5" />
-                    <text x="0" y="4" textAnchor="middle" fill="#67E8F9" fontSize="10" fontWeight="bold" fontFamily="JetBrains Mono">
-                      {supplyPoint.tdb.toFixed(1)}°C | {supplyPoint.rh.toFixed(0)}%
-                    </text>
-                  </g>
-                  {[0, 16, 32, 48, 64].map((dy, i) => (
-                    <g key={`arrow-out-${i}`} transform={`translate(0, ${dy})`}>
-                      <line x1="0" y1="0" x2="65" y2="0" stroke="#10B981" strokeWidth="3" strokeLinecap="round" />
-                      <polygon points="65,0 55,-4 57,0 55,4" fill="#10B981" />
-                    </g>
-                  ))}
-                </g>
-              </g>
-            </svg>
+            <AhuLongitudinalSvg
+              dynamicSvgViewBoxWidth={dynamicSvgViewBoxWidth}
+              dynamicChassisWidth={dynamicChassisWidth}
+              cutViewMode={cutViewMode}
+              transform={transform}
+              isWhiteTheme={isWhiteTheme}
+              isOverAhu={isOverAhu}
+              hoveredSlotIndex={hoveredSlotIndex}
+              enabledModules={enabledModules}
+              moduleWidths={moduleWidths}
+              moduleDimensionsMeters={moduleDimensionsMeters}
+              totalLengthMeters={totalLengthMeters}
+              editingModuleId={editingModuleId}
+              ahuSteps={ahuSteps}
+              selectedPointId={selectedPointId}
+              outdoorPoint={outdoorPoint}
+              supplyPoint={supplyPoint}
+              isFlowActive={isFlowActive}
+              onSelectPoint={onSelectPoint}
+              onSelectModuleAndPoint={handleSelectModuleAndPoint}
+              onMoveModule={handleMoveModule}
+              onRemoveModule={handleRemoveModule}
+              onDragExistingModule={(idx) => {
+                setDraggedExistingIndex(idx);
+                setIsOverAhu(true);
+              }}
+              onDragEndExistingModule={() => {
+                setIsOverAhu(false);
+                setHoveredSlotIndex(null);
+              }}
+              getIdaeModuleTitle={getIdaeModuleTitle}
+              propertiesDetailMode={propertiesDetailMode}
+            />
 
             {/* Bottom Floating Hint Overlay */}
             <div className="absolute bottom-3 left-4 z-10 hidden sm:flex items-center gap-2 text-[11px] text-slate-400 font-mono bg-slate-950/80 backdrop-blur-sm px-3 py-1.5 rounded-lg border border-slate-800/80 pointer-events-none shadow-md">
@@ -2176,8 +2226,9 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
 
         {/* Split View */}
         {schematicMode === 'split_sync' && (
-          <div className="w-full flex flex-col xl:flex-row gap-4 h-[620px]">
-            <div className="flex-1 h-full min-h-[380px] bg-slate-950/80 rounded-xl border border-slate-800 p-2 relative overflow-hidden flex flex-col">
+          <div className="w-full flex flex-col xl:flex-row gap-4 min-h-[640px] xl:h-[680px]">
+            {/* Left Column: Interactive Psychrometric Chart */}
+            <div className="flex-1 h-full min-h-[380px] bg-slate-950/80 rounded-xl border border-slate-800 p-2 relative overflow-hidden flex flex-col shadow-xl">
               <PsychrometricChart
                 points={points}
                 processes={processes}
@@ -2191,21 +2242,200 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
                 layers={layers}
               />
             </div>
-            <div className="flex-1 h-full min-h-[380px] bg-slate-950/80 rounded-xl border border-slate-800 p-3 flex flex-col justify-between">
-              <span className="text-xs font-mono text-cyan-400 font-bold">
-                {enabledModules.length} secciones modulares ensambladas
-              </span>
-              <div className="p-3 bg-slate-900 rounded-xl border border-slate-800 text-xs">
-                <div className="grid grid-cols-2 gap-2 font-mono">
-                  <div>Potencia Frío: {coolingPowerKW.toFixed(1)} kW</div>
-                  <div>Condensados: {condensateLitersPerHour.toFixed(2)} L/h</div>
-                  <div>Potencia Calor: {heatingPowerKW.toFixed(1)} kW</div>
-                  <div>Pérdida Carga: {totalPressureDropPa} Pa</div>
+
+            {/* Right Column: Assembled Modular Sections of AHU & Thermodynamic Balance */}
+            <div className="flex-1 h-full min-h-[460px] bg-slate-950/90 rounded-xl border border-slate-800 p-3 flex flex-col shadow-xl gap-2.5 overflow-y-auto scrollbar-thin">
+              {/* Header */}
+              <div className="flex items-center justify-between pb-2 border-b border-slate-800/80">
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded-md bg-cyan-950 border border-cyan-500/40 flex items-center justify-center text-cyan-400">
+                    <AirVent className="w-3.5 h-3.5" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-white font-tech flex items-center gap-2">
+                      <span>Corte Longitudinal UTA Ensamblada</span>
+                      <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full bg-cyan-950/80 text-cyan-300 border border-cyan-800/50">
+                        {enabledModules.length} secciones modulares · {totalLengthMeters.toFixed(2)} m
+                      </span>
+                    </h4>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <div className="flex items-center bg-slate-900 border border-slate-800 rounded-lg p-0.5 text-[10px]">
+                    <button
+                      onClick={() => setCutViewMode('elevation')}
+                      className={`px-2 py-0.5 rounded-md font-semibold transition-colors ${
+                        cutViewMode === 'elevation'
+                          ? 'bg-amber-400 text-black font-bold'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                      title="Alzado"
+                    >
+                      Alzado
+                    </button>
+                    <button
+                      onClick={() => setCutViewMode('plan')}
+                      className={`px-2 py-0.5 rounded-md font-semibold transition-colors ${
+                        cutViewMode === 'plan'
+                          ? 'bg-amber-400 text-black font-bold'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                      title="Planta"
+                    >
+                      Planta
+                    </button>
+                    <button
+                      onClick={() => setCutViewMode('dual')}
+                      className={`px-2 py-0.5 rounded-md font-semibold transition-colors ${
+                        cutViewMode === 'dual'
+                          ? 'bg-amber-400 text-black font-bold'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                      title="Dual (Alzado + Planta)"
+                    >
+                      Dual
+                    </button>
+                  </div>
+
+                  <button
+                    onClick={() => setSchematicMode('ahu_section')}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-mono font-bold text-amber-400 bg-amber-950/40 border border-amber-800/50 hover:bg-amber-900/40 transition-colors shadow-sm"
+                    title="Abrir vista completa del Corte Longitudinal UTA"
+                  >
+                    <span>Corte Completo</span>
+                    <ChevronRight className="w-3 h-3" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Longitudinal Cut Graphic (SVG Canvas) */}
+              <div className={`w-full flex-1 min-h-[240px] max-h-[340px] relative overflow-hidden rounded-lg ${
+                isWhiteTheme ? 'bg-slate-100/90 border-slate-300' : 'bg-slate-950/70 border-slate-800/80'
+              } border flex items-center justify-center p-1`}>
+                <AhuLongitudinalSvg
+                  dynamicSvgViewBoxWidth={dynamicSvgViewBoxWidth}
+                  dynamicChassisWidth={dynamicChassisWidth}
+                  cutViewMode={cutViewMode}
+                  transform={{ zoom: 1, panX: 0, panY: 0 }}
+                  isWhiteTheme={isWhiteTheme}
+                  isOverAhu={false}
+                  hoveredSlotIndex={null}
+                  enabledModules={enabledModules}
+                  moduleWidths={moduleWidths}
+                  moduleDimensionsMeters={moduleDimensionsMeters}
+                  totalLengthMeters={totalLengthMeters}
+                  editingModuleId={editingModuleId}
+                  ahuSteps={ahuSteps}
+                  selectedPointId={selectedPointId}
+                  outdoorPoint={outdoorPoint}
+                  supplyPoint={supplyPoint}
+                  isFlowActive={isFlowActive}
+                  onSelectPoint={onSelectPoint}
+                  onSelectModuleAndPoint={handleSelectModuleAndPoint}
+                  onMoveModule={handleMoveModule}
+                  onRemoveModule={handleRemoveModule}
+                  getIdaeModuleTitle={getIdaeModuleTitle}
+                  isSplit={true}
+                  propertiesDetailMode={propertiesDetailMode}
+                />
+              </div>
+
+              {/* Horizontal Strip of Assembled Modular Sections with Step Points */}
+              <div className="space-y-1">
+                <div className="flex items-center justify-between text-[11px] font-mono text-slate-400">
+                  <span className="flex items-center gap-1 font-semibold text-slate-300">
+                    <Sliders className="w-3 h-3 text-cyan-400" />
+                    <span>Secciones y Transformaciones en Cascada</span>
+                  </span>
+                  <span className="text-[10px] text-slate-500">Clic en módulo para editar parámetros</span>
+                </div>
+
+                <div className="flex items-center gap-2 overflow-x-auto pb-1 pt-0.5 scrollbar-thin">
+                  {ahuSteps.map((step, idx) => {
+                    const isSelected = editingModuleId === step.module.id || selectedPointId === step.associatedPointId;
+                    return (
+                      <div
+                        key={`split-step-${step.module.id}-${idx}`}
+                        onClick={() => handleSelectModuleAndPoint(step.module.id, step.associatedPointId)}
+                        className={`flex-shrink-0 cursor-pointer p-2 rounded-lg border transition-all flex flex-col justify-between w-[130px] ${
+                          isSelected
+                            ? 'bg-cyan-950/60 border-cyan-400 shadow-md shadow-cyan-500/20 ring-1 ring-cyan-500/40'
+                            : 'bg-slate-900/80 border-slate-800 hover:border-slate-700 hover:bg-slate-900'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-1 mb-1">
+                          <span className="text-[10px] font-mono font-bold text-slate-500">#{idx + 1}</span>
+                          <span
+                            className="text-[9px] font-mono font-bold px-1.5 py-0.2 rounded"
+                            style={{
+                              backgroundColor: `${step.associatedPointColor}20`,
+                              color: step.associatedPointColor,
+                              border: `1px solid ${step.associatedPointColor}40`,
+                            }}
+                          >
+                            {step.isTransformation ? 'Transform.' : 'Paso'}
+                          </span>
+                        </div>
+
+                        <div className="text-xs font-bold text-white truncate font-tech" title={step.module.name}>
+                          {getIdaeModuleTitle(step.module)}
+                        </div>
+
+                        <div className="text-[10px] font-mono text-cyan-300 mt-1 flex items-center justify-between">
+                          <span>{step.exitPoint.tdb.toFixed(1)}°C</span>
+                          <span className="text-slate-400">{step.exitPoint.rh.toFixed(0)}% HR</span>
+                        </div>
+
+                        {step.isTransformation && (
+                          <div className="text-[9px] font-mono text-amber-400 mt-0.5 truncate">
+                            {step.processType === 'cooling_dehumid'
+                              ? `−${(step.metrics?.qTotal ?? 0).toFixed(1)} kW Frío`
+                              : step.processType === 'sensible_heating'
+                              ? `+${(step.metrics?.qSensible ?? 0).toFixed(1)} kW Calor`
+                              : step.processType === 'heat_recovery'
+                              ? `η ${step.module.params.recoveryEfficiency ?? 75}% Recup.`
+                              : step.processType === 'mixing'
+                              ? `${Math.round((step.module.params.outdoorRatio ?? 0.3) * 100)}% ODA`
+                              : `${step.module.pressureDropPa} Pa`}
+                          </div>
+                        )}
+                        {!step.isTransformation && (
+                          <div className="text-[9px] font-mono text-slate-500 mt-0.5">
+                            ΔP: {step.module.pressureDropPa} Pa
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Bottom Thermodynamic Balance Summary */}
+              <div className="p-2.5 bg-slate-900/90 rounded-xl border border-slate-800 text-xs">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 font-mono">
+                  <div className="bg-slate-950/60 p-1.5 rounded-lg border border-slate-800/80">
+                    <span className="text-[10px] text-slate-500 block">Potencia Frío:</span>
+                    <span className="text-xs font-bold text-cyan-400">{coolingPowerKW.toFixed(1)} kW</span>
+                  </div>
+                  <div className="bg-slate-950/60 p-1.5 rounded-lg border border-slate-800/80">
+                    <span className="text-[10px] text-slate-500 block">Potencia Calor:</span>
+                    <span className="text-xs font-bold text-amber-400">{heatingPowerKW.toFixed(1)} kW</span>
+                  </div>
+                  <div className="bg-slate-950/60 p-1.5 rounded-lg border border-slate-800/80">
+                    <span className="text-[10px] text-slate-500 block">Condensados:</span>
+                    <span className="text-xs font-bold text-emerald-400">{condensateLitersPerHour.toFixed(2)} L/h</span>
+                  </div>
+                  <div className="bg-slate-950/60 p-1.5 rounded-lg border border-slate-800/80">
+                    <span className="text-[10px] text-slate-500 block">Pérdida Carga Total:</span>
+                    <span className="text-xs font-bold text-rose-400">{totalPressureDropPa} Pa</span>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
         )}
+
       </div>
 
       {/* ---------------- 4. PARAMETER CONFIGURATION DRAWER (FOR CLICKED / DROPPED MODULE) ---------------- */}
@@ -2266,6 +2496,62 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
               </button>
             </div>
           </div>
+
+          {/* Detailed Thermodynamic Changes Generated by this Module */}
+          {(() => {
+            const step = ahuStepResults.steps.find((s) => s.module.id === activeEditingModule.id);
+            if (!step) return null;
+            const deltaT = step.exitPoint.tdb - step.entryPoint.tdb;
+            const deltaRh = step.exitPoint.rh - step.entryPoint.rh;
+            const deltaW = (step.exitPoint.w - step.entryPoint.w) * 1000;
+            const deltaH = step.exitPoint.h - step.entryPoint.h;
+
+            return (
+              <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 text-xs space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-1 text-[11px] font-mono font-bold text-cyan-300">
+                  <span className="flex items-center gap-1.5">
+                    <Activity className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Propiedades Termodinámicas que modifica este Módulo:</span>
+                  </span>
+                  <span className="text-slate-400 font-normal">
+                    Entrada: {step.entryPoint.tdb.toFixed(1)}°C, {step.entryPoint.rh.toFixed(0)}% HR → Salida: {step.exitPoint.tdb.toFixed(1)}°C, {step.exitPoint.rh.toFixed(0)}% HR
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 font-mono text-[11px]">
+                  <div className="bg-slate-900/90 p-2 rounded-lg border border-slate-800/80">
+                    <span className="text-[10px] text-slate-500 block">Salto Térmico ΔT:</span>
+                    <span className={`font-bold text-xs ${deltaT < 0 ? 'text-cyan-400' : deltaT > 0 ? 'text-rose-400' : 'text-slate-300'}`}>
+                      {deltaT > 0 ? '+' : ''}{deltaT.toFixed(1)} °C
+                    </span>
+                  </div>
+                  <div className="bg-slate-900/90 p-2 rounded-lg border border-slate-800/80">
+                    <span className="text-[10px] text-slate-500 block">Variación ΔHR:</span>
+                    <span className={`font-bold text-xs ${deltaRh > 0 ? 'text-cyan-400' : deltaRh < 0 ? 'text-amber-400' : 'text-slate-300'}`}>
+                      {deltaRh > 0 ? '+' : ''}{deltaRh.toFixed(0)} %
+                    </span>
+                  </div>
+                  <div className="bg-slate-900/90 p-2 rounded-lg border border-slate-800/80">
+                    <span className="text-[10px] text-slate-500 block">Humedad Δw:</span>
+                    <span className={`font-bold text-xs ${Math.abs(deltaW) < 0.05 ? 'text-slate-400' : deltaW < 0 ? 'text-cyan-300' : 'text-emerald-400'}`}>
+                      {Math.abs(deltaW) < 0.05 ? '0 (cte)' : `${deltaW > 0 ? '+' : ''}${deltaW.toFixed(2)} g/kg`}
+                    </span>
+                  </div>
+                  <div className="bg-slate-900/90 p-2 rounded-lg border border-slate-800/80">
+                    <span className="text-[10px] text-slate-500 block">Salto Entálpico Δh:</span>
+                    <span className="font-bold text-xs text-amber-300">
+                      {deltaH > 0 ? '+' : ''}{deltaH.toFixed(1)} kJ/kg
+                    </span>
+                  </div>
+                  <div className="bg-slate-900/90 p-2 rounded-lg border border-slate-800/80">
+                    <span className="text-[10px] text-slate-500 block">Pérdida Carga ΔP:</span>
+                    <span className="font-bold text-xs text-rose-300">
+                      -{activeEditingModule.pressureDropPa} Pa
+                    </span>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Module-Specific Controls */}
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3.5 text-xs">
@@ -2596,6 +2882,17 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
         isOpen={isSymbolGuideOpen}
         onClose={() => setIsSymbolGuideOpen(false)}
         onSelectModuleType={(modType) => {
+          insertModuleAt(modType, enabledModules.length);
+        }}
+        onOpenAhuExample={() => setIsAhuExampleOpen(true)}
+      />
+
+      {/* Anatomía y Componentes Principales de una UTA (Infografía con uta_ejemplo.png) */}
+      <AhuExampleGuideModal
+        isOpen={isAhuExampleOpen}
+        onClose={() => setIsAhuExampleOpen(false)}
+        onLoadStandardSetup={() => handleLoadArchetype('arch-idae-complete')}
+        onSelectComponent={(modType) => {
           insertModuleAt(modType, enabledModules.length);
         }}
       />

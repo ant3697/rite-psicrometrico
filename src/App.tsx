@@ -1,5 +1,14 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import {
+  AirVent,
+  LineChart,
+  FileSpreadsheet,
+  Activity,
+  Wind,
+  Sliders,
+  X,
+} from 'lucide-react';
+import {
   StatePoint,
   ProcessConnection,
   ProcessType,
@@ -32,8 +41,8 @@ import { AiAssistantModal } from './components/AiAssistantModal';
 import { IDAEComplianceModal } from './components/IDAEComplianceModal';
 
 export default function App() {
-  // Navigation & View
-  const [currentView, setCurrentView] = useState<'chart' | 'points' | 'processes' | 'comfort' | 'schematic'>('chart');
+  // Navigation & View: default view is 'schematic' (Esquema Físico & UTA)
+  const [currentView, setCurrentView] = useState<'chart' | 'points' | 'processes' | 'comfort' | 'schematic'>('schematic');
   const [chartType, setChartType] = useState<ChartType>('carrier');
   const [units, setUnits] = useState<UnitSystem>('SI');
 
@@ -67,6 +76,7 @@ export default function App() {
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [isAiModalOpen, setIsAiModalOpen] = useState(false);
   const [isIdaeModalOpen, setIsIdaeModalOpen] = useState(false);
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
 
   // Initialize with the standard Summer AC Preset
   const [points, setPoints] = useState<StatePoint[]>(() => {
@@ -357,26 +367,28 @@ export default function App() {
       />
 
       {/* Main Workspace: Left Sidebar + Center Chart/Tables */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Sidebar Controls */}
-        <SidebarControls
-          points={points}
-          processes={updatedProcesses}
-          selectedPointId={selectedPointId}
-          onSelectPoint={setSelectedPointId}
-          onAddPoint={handleAddPoint}
-          onUpdatePoint={handleUpdatePoint}
-          onDeletePoint={handleDeletePoint}
-          onAddProcess={handleAddProcess}
-          onDeleteProcess={handleDeleteProcess}
-          pressure={atmosphere.pressure}
-          units={units}
-          layers={layers}
-          onToggleLayer={handleToggleLayer}
-        />
+      <div className="flex-1 flex overflow-hidden relative">
+        {/* Sidebar Controls: desktop sticky sidebar */}
+        <div className="hidden lg:flex h-full shrink-0">
+          <SidebarControls
+            points={points}
+            processes={updatedProcesses}
+            selectedPointId={selectedPointId}
+            onSelectPoint={setSelectedPointId}
+            onAddPoint={handleAddPoint}
+            onUpdatePoint={handleUpdatePoint}
+            onDeletePoint={handleDeletePoint}
+            onAddProcess={handleAddProcess}
+            onDeleteProcess={handleDeleteProcess}
+            pressure={atmosphere.pressure}
+            units={units}
+            layers={layers}
+            onToggleLayer={handleToggleLayer}
+          />
+        </div>
 
-        {/* Dynamic Main Stage View */}
-        <main className="flex-1 h-full p-3 overflow-hidden flex flex-col bg-[#0a0a0c]">
+        {/* Dynamic Main Stage View with responsive padding for mobile bottom bar */}
+        <main className="flex-1 h-full p-2 sm:p-3 pb-16 md:pb-3 overflow-hidden flex flex-col bg-[#0a0a0c]">
           {currentView === 'chart' && (
             <PsychrometricChart
               points={points}
@@ -418,10 +430,19 @@ export default function App() {
           {currentView === 'comfort' && (
             <ComfortView
               points={points}
+              processes={updatedProcesses}
               units={units}
+              selectedPointId={selectedPointId}
               onSelectPoint={(id) => {
                 setSelectedPointId(id);
-                setCurrentView('chart');
+              }}
+              onApplyMixingRatio={(ratio) => {
+                const mixingProcIndex = processes.findIndex((p) => p.type === 'mixing');
+                if (mixingProcIndex >= 0) {
+                  const updated = [...processes];
+                  updated[mixingProcIndex] = { ...updated[mixingProcIndex], mixingRatio: ratio };
+                  setProcesses(updated);
+                }
               }}
               onOpenIdaeModal={() => setIsIdaeModalOpen(true)}
             />
@@ -444,10 +465,120 @@ export default function App() {
                 setProcesses(newProcs);
               }}
               onOpenIdaeModal={() => setIsIdaeModalOpen(true)}
+              onNavigateToView={(v) => setCurrentView(v)}
             />
           )}
         </main>
+
+        {/* Floating button on smaller screens (< lg) to open Sidebar Controls */}
+        <button
+          onClick={() => setIsMobileSidebarOpen(true)}
+          className="lg:hidden fixed bottom-18 md:bottom-5 left-3 z-30 px-3 py-2 rounded-full bg-[#1e293b]/95 border border-amber-400/40 text-amber-300 shadow-2xl flex items-center gap-1.5 text-xs font-bold backdrop-blur-md cursor-pointer touch-manipulation hover:bg-[#334155]"
+          title="Abrir controles de puntos, procesos y capas"
+        >
+          <Sliders className="w-3.5 h-3.5" />
+          <span>Puntos & Capas</span>
+        </button>
+
+        {/* Mobile / Tablet Drawer for Sidebar Controls (< lg) */}
+        {isMobileSidebarOpen && (
+          <div className="lg:hidden fixed inset-0 z-50 flex bg-black/75 backdrop-blur-sm">
+            <div className="w-88 max-w-[88vw] h-full flex flex-col bg-[#1a1a1c] shadow-2xl relative">
+              <div className="p-3 border-b border-white/10 flex justify-between items-center bg-black/60 shrink-0">
+                <span className="text-xs font-bold text-amber-300 font-mono uppercase tracking-wider">
+                  Puntos, Procesos & Capas
+                </span>
+                <button
+                  onClick={() => setIsMobileSidebarOpen(false)}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 touch-manipulation"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="flex-1 overflow-hidden">
+                <SidebarControls
+                  points={points}
+                  processes={updatedProcesses}
+                  selectedPointId={selectedPointId}
+                  onSelectPoint={(id) => {
+                    setSelectedPointId(id);
+                    setIsMobileSidebarOpen(false);
+                  }}
+                  onAddPoint={handleAddPoint}
+                  onUpdatePoint={handleUpdatePoint}
+                  onDeletePoint={handleDeletePoint}
+                  onAddProcess={handleAddProcess}
+                  onDeleteProcess={handleDeleteProcess}
+                  pressure={atmosphere.pressure}
+                  units={units}
+                  layers={layers}
+                  onToggleLayer={handleToggleLayer}
+                />
+              </div>
+            </div>
+            <div
+              className="flex-1 cursor-pointer"
+              onClick={() => setIsMobileSidebarOpen(false)}
+            />
+          </div>
+        )}
       </div>
+
+      {/* Mobile Bottom Navigation Bar (md:hidden for smartphones and portrait tablets) */}
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 h-14 bg-[#0a0a0c]/95 border-t border-white/10 z-40 flex items-center justify-around px-2 backdrop-blur-xl touch-manipulation shadow-[0_-5px_20px_rgba(0,0,0,0.8)]">
+        <button
+          onClick={() => setCurrentView('schematic')}
+          className={`flex flex-col items-center justify-center py-1 px-3 rounded-lg transition-colors cursor-pointer touch-manipulation ${
+            currentView === 'schematic' ? 'text-[#fbbf24] font-bold' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <AirVent className="w-4 h-4" />
+          <span className="text-[10px] mt-0.5 font-medium">UTA</span>
+        </button>
+
+        <button
+          onClick={() => {
+            setCurrentView('chart');
+            setChartType('carrier');
+          }}
+          className={`flex flex-col items-center justify-center py-1 px-3 rounded-lg transition-colors cursor-pointer touch-manipulation ${
+            currentView === 'chart' && chartType === 'carrier' ? 'text-[#34d399] font-bold' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <LineChart className="w-4 h-4" />
+          <span className="text-[10px] mt-0.5 font-medium">Carta</span>
+        </button>
+
+        <button
+          onClick={() => setCurrentView('points')}
+          className={`flex flex-col items-center justify-center py-1 px-3 rounded-lg transition-colors cursor-pointer touch-manipulation ${
+            currentView === 'points' ? 'text-[#fb923c] font-bold' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <FileSpreadsheet className="w-4 h-4" />
+          <span className="text-[10px] mt-0.5 font-medium">Puntos</span>
+        </button>
+
+        <button
+          onClick={() => setCurrentView('processes')}
+          className={`flex flex-col items-center justify-center py-1 px-3 rounded-lg transition-colors cursor-pointer touch-manipulation ${
+            currentView === 'processes' ? 'text-[#c084fc] font-bold' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <Activity className="w-4 h-4" />
+          <span className="text-[10px] mt-0.5 font-medium">Procesos</span>
+        </button>
+
+        <button
+          onClick={() => setCurrentView('comfort')}
+          className={`flex flex-col items-center justify-center py-1 px-3 rounded-lg transition-colors cursor-pointer touch-manipulation ${
+            currentView === 'comfort' ? 'text-[#a3e635] font-bold' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <Wind className="w-4 h-4" />
+          <span className="text-[10px] mt-0.5 font-medium">Confort</span>
+        </button>
+      </nav>
 
       {/* Modals */}
       <AtmosphereModal

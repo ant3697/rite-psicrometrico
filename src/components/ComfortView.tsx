@@ -1,21 +1,46 @@
 import React, { useState } from 'react';
 import { StatePoint, UnitSystem } from '../types/psychrometrics';
 import { calculateFangerPMV, UnitConvert } from '../utils/psychrolib';
-import { ShieldCheck, Info, CheckCircle2, AlertCircle, Thermometer, User, Wind, Sliders } from 'lucide-react';
+import { FangerPpdPmvChart, getFangerSensation } from './FangerPpdPmvChart';
+import { VentilationIAQView } from './VentilationIAQView';
+import { ProcessConnection } from '../types/psychrometrics';
+import {
+  ShieldCheck,
+  Info,
+  CheckCircle2,
+  AlertCircle,
+  Thermometer,
+  User,
+  Wind,
+  Sliders,
+  Layers,
+  Sparkles,
+  HelpCircle,
+  Activity,
+} from 'lucide-react';
 
 interface ComfortViewProps {
   points: StatePoint[];
+  processes?: ProcessConnection[];
   units: UnitSystem;
+  selectedPointId?: string | null;
   onSelectPoint: (id: string) => void;
+  onApplyMixingRatio?: (ratio: number) => void;
   onOpenIdaeModal?: () => void;
 }
 
 export const ComfortView: React.FC<ComfortViewProps> = ({
   points,
+  processes = [],
   units,
+  selectedPointId,
   onSelectPoint,
+  onApplyMixingRatio,
   onOpenIdaeModal,
 }) => {
+  // Navigation between Thermal Comfort (Fanger) and Indoor Air Quality (Ventilation/IDA)
+  const [activeTab, setActiveTab] = useState<'thermal_comfort' | 'iaq_ventilation'>('thermal_comfort');
+
   // Environmental simulation parameters
   const [season, setSeason] = useState<'summer' | 'winter'>('summer');
   const [clo, setClo] = useState<number>(0.5); // 0.5 verano, 1.0 invierno
@@ -41,26 +66,28 @@ export const ComfortView: React.FC<ComfortViewProps> = ({
             </span>
           </div>
           <p className="text-xs text-[#cbd5e1] mt-1 font-secondary">
-            Auditoría de confort térmico según el marco europeo (UNE-EN ISO 7730 / UNE-EN 16798-1 / RITE) y estándar americano ASHRAE 55
+            Auditoría de confort térmico según el modelo analítico de Fanger (ISO 7730 / RITE) y calidad de aire interior (SODECA / IDA 1-2-3)
           </p>
         </div>
 
         <div className="flex items-center gap-2">
           {/* Season Selector */}
-          <div className="tabs-container shrink-0">
-            <button
-              onClick={() => handleSeasonChange('summer')}
-              className={`tab-item text-xs ${season === 'summer' ? 'active' : ''}`}
-            >
-              Verano / Refrigeración (0.5 clo)
-            </button>
-            <button
-              onClick={() => handleSeasonChange('winter')}
-              className={`tab-item text-xs ${season === 'winter' ? 'active' : ''}`}
-            >
-              Invierno / Calefacción (1.0 clo)
-            </button>
-          </div>
+          {activeTab === 'thermal_comfort' && (
+            <div className="tabs-container shrink-0">
+              <button
+                onClick={() => handleSeasonChange('summer')}
+                className={`tab-item text-xs ${season === 'summer' ? 'active' : ''}`}
+              >
+                Verano (0.5 clo)
+              </button>
+              <button
+                onClick={() => handleSeasonChange('winter')}
+                className={`tab-item text-xs ${season === 'winter' ? 'active' : ''}`}
+              >
+                Invierno (1.0 clo)
+              </button>
+            </div>
+          )}
 
           {/* IDAE Compliance Audit button */}
           {onOpenIdaeModal && (
@@ -76,27 +103,107 @@ export const ComfortView: React.FC<ComfortViewProps> = ({
         </div>
       </div>
 
-      {/* Normative Context Card: European Framework vs ASHRAE 55 */}
-      <div className="p-4 rounded-[12px] bg-[#1a1a1c]/80 border border-[rgba(255,255,255,0.1)] space-y-2.5 shadow-lg">
-        <div className="flex items-center gap-2 text-[#fbbf24] font-semibold text-xs uppercase tracking-wider">
-          <Info className="w-4 h-4" />
-          <span>Marco Normativo Conjunto: UNE-EN ISO 7730 & UNE-EN 16798-1</span>
+      {/* Sub-Navigation Tabs: Thermal Comfort vs. Ventilation & IAQ */}
+      <div className="flex items-center gap-2 border-b border-white/10 pb-2">
+        <button
+          onClick={() => setActiveTab('thermal_comfort')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all ${
+            activeTab === 'thermal_comfort'
+              ? 'bg-[#38bdf8] text-black shadow-lg shadow-[#38bdf8]/20'
+              : 'bg-[#1a1a1c] text-[#94a3b8] hover:text-white border border-white/5'
+          }`}
+        >
+          <Thermometer className="w-4 h-4" />
+          <span>1. Confort Térmico & Fanger (PMV / PPD)</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('iaq_ventilation')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all ${
+            activeTab === 'iaq_ventilation'
+              ? 'bg-[#38bdf8] text-black shadow-lg shadow-[#38bdf8]/20'
+              : 'bg-[#1a1a1c] text-[#94a3b8] hover:text-white border border-white/5'
+          }`}
+        >
+          <Wind className="w-4 h-4" />
+          <span>2. Calidad de Aire & Ventilación (IDA / CO₂ / SODECA)</span>
+          <span className="px-1.5 py-0.2 rounded text-[9px] bg-[#fbbf24]/20 text-[#fbbf24] border border-[#fbbf24]/30 ml-1">
+            Nuevo
+          </span>
+        </button>
+      </div>
+
+      {activeTab === 'iaq_ventilation' ? (
+        <VentilationIAQView
+          points={points}
+          processes={processes}
+          units={units}
+          onApplyMixingRatio={onApplyMixingRatio}
+        />
+      ) : (
+        <>
+
+      {/* ISO 7730 Conceptual Mind Map & Normative Framework */}
+      <div className="p-4 rounded-[12px] bg-[#1a1a1c]/80 border border-[rgba(255,255,255,0.1)] space-y-3.5 shadow-lg">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 text-[#fbbf24] font-semibold text-xs uppercase tracking-wider">
+            <Info className="w-4 h-4" />
+            <span>Marco Normativo ISO 7730:2005 · Ergonomía del Entorno Térmico</span>
+          </div>
+          <span className="text-[11px] text-[#94a3b8] font-mono">
+            RITE IT 1.1.4.1 · CTE DB-HE · UNE-EN 16798-1
+          </span>
         </div>
-        <p className="text-xs text-[#cbd5e1] leading-relaxed font-secondary">
-          En el marco europeo y de la legislación española (<strong>RITE IT 1.1.4.1</strong> y Código Técnico <strong>CTE DB-HE</strong>), el equivalente directo a la norma americana <strong>ASHRAE 55</strong> está constituido conjuntamente por:
-        </p>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1 text-xs">
-          <div className="p-3 bg-[#0a0a0c]/80 rounded-[8px] border border-[rgba(255,255,255,0.08)]">
-            <span className="font-semibold text-[#93c5fd]">1. UNE-EN ISO 7730:</span>
-            <p className="text-[#cbd5e1] mt-1 leading-normal font-secondary">
-              Define el cálculo matemático analítico de los índices <strong>PMV</strong> (Predicted Mean Vote) y <strong>PPD</strong> (Predicted Percentage of Dissatisfied) propuestos por P.O. Fanger, evaluando el equilibrio térmico del cuerpo humano.
+
+        {/* 6 Factors of Thermal Balance Map */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+          {/* 4 Environmental Parameters */}
+          <div className="p-3 bg-[#0a0a0c]/85 rounded-[8px] border border-[rgba(255,255,255,0.08)] space-y-1.5">
+            <div className="flex items-center gap-1.5 text-[#38bdf8] font-bold">
+              <Thermometer className="w-3.5 h-3.5" />
+              <span>4 Parámetros Ambientales</span>
+            </div>
+            <ul className="text-[11px] text-[#cbd5e1] space-y-1 font-secondary pl-1">
+              <li>• <strong>Temperatura del aire (T_aire)</strong> y de superficies</li>
+              <li>• <strong>Temperatura radiante media (T_mr)</strong></li>
+              <li>• <strong>Humedad relativa (HR)</strong> del aire</li>
+              <li>• <strong>Velocidad del aire (v)</strong> / ventilación</li>
+            </ul>
+          </div>
+
+          {/* 2 Personal Parameters */}
+          <div className="p-3 bg-[#0a0a0c]/85 rounded-[8px] border border-[rgba(255,255,255,0.08)] space-y-1.5">
+            <div className="flex items-center gap-1.5 text-[#fbbf24] font-bold">
+              <User className="w-3.5 h-3.5" />
+              <span>2 Parámetros Personales</span>
+            </div>
+            <ul className="text-[11px] text-[#cbd5e1] space-y-1 font-secondary pl-1">
+              <li>• <strong>Tasa metabólica (met)</strong>: actividad y esfuerzo físico</li>
+              <li>• <strong>Aislamiento de la ropa (clo)</strong>: vestimenta de verano o invierno</li>
+              <li>• <em>Adaptación</em>: Cláusula 10 de ISO 7730</li>
+            </ul>
+          </div>
+
+          {/* Output Indices PMV & PPD */}
+          <div className="p-3 bg-[#0a0a0c]/85 rounded-[8px] border border-[rgba(255,255,255,0.08)] space-y-1.5">
+            <div className="flex items-center gap-1.5 text-[#a3e635] font-bold">
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Índices Resultantes (Fanger)</span>
+            </div>
+            <p className="text-[11px] text-[#cbd5e1] leading-relaxed font-secondary">
+              <strong>PMV (Voto Medio Previsto)</strong>: escala de sensación entre -3 y +3.
+              <br />
+              <strong>PPD (Insatisfechos Previstos)</strong>: curva analítica derivada del balance térmico.
             </p>
           </div>
-          <div className="p-3 bg-[#0a0a0c]/80 rounded-[8px] border border-[rgba(255,255,255,0.08)]">
-            <span className="font-semibold text-[#a3e635]">2. UNE-EN 16798-1 (antigua EN 15251):</span>
-            <p className="text-[#cbd5e1] mt-1 leading-normal font-secondary">
-              Clasifica los requisitos de calidad del ambiente térmico interior en <strong>Categoría I</strong> (alta exigencia/personas vulnerables), <strong>Categoría II</strong> (nivel normal para obra nueva y reformas estándar RITE) y <strong>Categoría III</strong> (moderada/existente).
-            </p>
+        </div>
+
+        {/* Fanger's 5% Residual Law Callout */}
+        <div className="p-3 rounded-lg bg-[#f59e0b]/10 border border-[#f59e0b]/30 flex items-start gap-2.5 text-xs text-[#fde68a]">
+          <HelpCircle className="w-4 h-4 text-[#f59e0b] shrink-0 mt-0.5" />
+          <div className="leading-relaxed font-secondary">
+            <strong className="text-[#fbbf24] font-primary">Principio del 5% Residual de Fanger (ISO 7730):</strong>{' '}
+            Aunque el índice PMV = 0 (sensación térmica perfectamente neutra), <strong>siempre existe un PPD = 5% de personas insatisfechas</strong>. Debido a las diferencias metabólicas y fisiológicas naturales entre individuos, no es posible satisfacer al 100% de los ocupantes al mismo tiempo. Por ello, el objetivo de confort térmico en climatización es alcanzar la <strong>Categoría II (|PMV| ≤ 0.5 → PPD ≤ 10%)</strong> o <strong>Categoría I (|PMV| ≤ 0.2 → PPD ≤ 6%)</strong>.
           </div>
         </div>
       </div>
@@ -167,6 +274,16 @@ export const ComfortView: React.FC<ComfortViewProps> = ({
         </div>
       </div>
 
+      {/* Interactive Fanger PPD vs. PMV Analytical Curve Chart */}
+      <FangerPpdPmvChart
+        points={points}
+        selectedPointId={selectedPointId}
+        onSelectPoint={onSelectPoint}
+        airVelocity={airVelocity}
+        met={met}
+        clo={clo}
+      />
+
       {/* Points Thermal Audit Table */}
       <div className="overflow-x-auto rounded-xl border border-[rgba(255,255,255,0.1)] bg-[#1a1a1c]/80 backdrop-blur-md shadow-2xl">
         <table className="w-full text-left border-collapse text-xs">
@@ -176,7 +293,8 @@ export const ComfortView: React.FC<ComfortViewProps> = ({
               <th className="py-3 px-3 text-right">Tbs [{units === 'IP' ? '°F' : '°C'}]</th>
               <th className="py-3 px-3 text-right">HR [%]</th>
               <th className="py-3 px-3 text-right">W [g/kg]</th>
-              <th className="py-3 px-3 text-center">Índice PMV (Fanger)</th>
+              <th className="py-3 px-3 text-center">Índice PMV</th>
+              <th className="py-3 px-3 text-center">Sensación (7 Puntos)</th>
               <th className="py-3 px-3 text-center">Insatisfechos PPD</th>
               <th className="py-3 px-3 text-center">Categoría UNE-EN 16798-1</th>
               <th className="py-3 px-3 text-center">Confort ASHRAE 55</th>
@@ -188,6 +306,8 @@ export const ComfortView: React.FC<ComfortViewProps> = ({
               const fanger = calculateFangerPMV(pt.tdb, pt.rh, pt.tdb, airVelocity, met, clo);
               const pmv = fanger.pmv;
               const ppd = fanger.ppd;
+              const sensation = getFangerSensation(pmv);
+              const isSelected = pt.id === selectedPointId;
 
               // ASHRAE 55 zone evaluation (approximate boundaries)
               const ashraeOk =
@@ -209,7 +329,9 @@ export const ComfortView: React.FC<ComfortViewProps> = ({
                 <tr
                   key={pt.id}
                   onClick={() => onSelectPoint(pt.id)}
-                  className="hover:bg-[rgba(255,255,255,0.05)] transition-colors cursor-pointer"
+                  className={`transition-colors cursor-pointer ${
+                    isSelected ? 'bg-[rgba(56,189,248,0.12)] ring-1 ring-[#38bdf8]/40' : 'hover:bg-[rgba(255,255,255,0.05)]'
+                  }`}
                 >
                   <td className="py-3 px-4 font-primary font-semibold text-white flex items-center gap-2">
                     <span
@@ -245,6 +367,13 @@ export const ComfortView: React.FC<ComfortViewProps> = ({
                       }`}
                     >
                       {pmv > 0 ? `+${pmv.toFixed(2)}` : pmv.toFixed(2)}
+                    </span>
+                  </td>
+
+                  {/* Fanger 7-point Sensation Badge */}
+                  <td className="py-3 px-3 text-center font-primary">
+                    <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold border ${sensation.badgeBg}`}>
+                      {sensation.label}
                     </span>
                   </td>
 
@@ -329,6 +458,8 @@ export const ComfortView: React.FC<ComfortViewProps> = ({
           </p>
         </div>
       </div>
+      </>
+      )}
     </div>
   );
 };
