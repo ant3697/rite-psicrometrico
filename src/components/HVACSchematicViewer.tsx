@@ -8,6 +8,7 @@ import {
   ChartLayerVisibility,
   AHUModuleItem,
   AHUModuleType,
+  IsolatedProcessInfo,
 } from '../types/psychrometrics';
 import {
   solveStatePoint,
@@ -42,6 +43,8 @@ import {
   GraduationCap,
   ChevronRight,
   ChevronLeft,
+  ChevronDown,
+  ChevronUp,
   Activity,
   Gauge,
   Zap,
@@ -56,6 +59,7 @@ import {
   Trash2,
   Settings,
   ArrowLeft,
+  Target,
   X,
   Volume2,
   Check,
@@ -83,6 +87,8 @@ interface HVACSchematicViewerProps {
   chartType: ChartType;
   layers: ChartLayerVisibility;
   onNavigateToView?: (view: 'chart' | 'points' | 'processes' | 'comfort' | 'schematic') => void;
+  isolatedProcessInfo?: IsolatedProcessInfo | null;
+  onSetIsolatedProcessInfo?: (info: IsolatedProcessInfo | null) => void;
 }
 
 interface ViewTransform {
@@ -991,6 +997,7 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
   chartType,
   layers,
   onNavigateToView,
+  onSetIsolatedProcessInfo,
 }) => {
   // Schematic mode: 'ahu_section', 'building_system', 'split_sync'
   const [schematicMode, setSchematicMode] = useState<'ahu_section' | 'building_system' | 'split_sync'>('ahu_section');
@@ -1086,6 +1093,7 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
 
   // Selected module for parameters configuration
   const [editingModuleId, setEditingModuleId] = useState<string | null>('mod-cooling');
+  const [isDrawerCollapsed, setIsDrawerCollapsed] = useState<boolean>(false);
 
   // Real-time synchronization toggle (auto-sync psychrometric points on slider move)
   const [autoSyncCycle, setAutoSyncCycle] = useState<boolean>(true);
@@ -1435,6 +1443,53 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
   const condensateLitersPerHour = ahuStepResults.condensateLitersPerHour;
   const totalPressureDropPa = ahuStepResults.totalPressureDrop;
 
+  // Isolated module state for psychrometric chart single transformation inspection
+  const [isolatedModuleId, setIsolatedModuleId] = useState<string | null>(null);
+
+  // Compute isolation payload for PsychrometricChart
+  const isolatedProcessInfo = useMemo(() => {
+    if (!isolatedModuleId) return null;
+    const step = ahuStepResults.steps.find((s) => s.module.id === isolatedModuleId);
+    if (!step) return null;
+
+    const matchedProc = processes.find(
+      (p) =>
+        (p.fromPointId === step.entryPoint.id && p.toPointId === step.exitPoint.id) ||
+        p.id.includes(step.module.id)
+    );
+
+    return {
+      moduleId: step.module.id,
+      moduleName: step.module.name,
+      moduleType: step.module.type,
+      isPassive: !step.isTransformation,
+      entryPoint: step.entryPoint,
+      exitPoint: step.exitPoint,
+      secondaryEntryPoint: step.module.type === 'mixing_box' ? returnPoint : undefined,
+      process: matchedProc,
+      pressureDropPa: step.module.pressureDropPa,
+      onClearIsolation: () => setIsolatedModuleId(null),
+    };
+  }, [isolatedModuleId, ahuStepResults.steps, processes, returnPoint]);
+
+  const handleToggleIsolateModule = (modId: string) => {
+    if (isolatedModuleId === modId) {
+      setIsolatedModuleId(null);
+    } else {
+      setIsolatedModuleId(modId);
+      if (schematicMode !== 'split_sync') {
+        setSchematicMode('split_sync');
+      }
+    }
+  };
+
+  // Sync isolated process info to parent application
+  useEffect(() => {
+    if (onSetIsolatedProcessInfo) {
+      onSetIsolatedProcessInfo(isolatedProcessInfo);
+    }
+  }, [isolatedProcessInfo, onSetIsolatedProcessInfo]);
+
   // Bidirectional sync: when selectedPointId changes from the left sidebar, highlight the corresponding module in the cut
   useEffect(() => {
     if (!selectedPointId) return;
@@ -1693,23 +1748,23 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
   };
 
   return (
-    <div className="w-full h-full flex flex-col overflow-y-auto space-y-4 font-primary pr-1 scrollbar-thin">
+    <div className="w-full h-full flex flex-col overflow-y-auto space-y-2 lg:space-y-2.5 font-primary pr-0.5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
       {/* ---------------- 1. HEADER & MODE SWITCHER BAR ---------------- */}
-      <div className="panel-glass p-3 flex flex-wrap items-center justify-between gap-3 relative z-40">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-[6px] bg-[#fbbf24] text-black flex items-center justify-center shadow-[0_0_10px_rgba(251,191,36,0.3)]">
-            <Wrench className="w-5 h-5" />
+      <div className="panel-glass p-2 sm:p-2.5 px-3 flex flex-wrap items-center justify-between gap-2 relative z-40 shrink-0">
+        <div className="flex items-center gap-2.5">
+          <div className="w-7 h-7 rounded-[5px] bg-[#fbbf24] text-black flex items-center justify-center shadow-[0_0_8px_rgba(251,191,36,0.3)] shrink-0">
+            <Wrench className="w-4 h-4" />
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h3 className="text-base font-bold text-white tracking-wide">
+              <h3 className="text-sm font-bold text-white tracking-wide">
                 Corte Longitudinal UTA & Montador Modular
               </h3>
-              <span className="text-[10px] px-2 py-0.5 rounded-[4px] font-mono bg-[#fbbf24]/15 text-[#fbbf24] border border-[#fbbf24]/30 font-semibold">
+              <span className="text-[10px] px-1.5 py-0.2 rounded-[4px] font-mono bg-[#fbbf24]/15 text-[#fbbf24] border border-[#fbbf24]/30 font-semibold hidden sm:inline">
                 Arrastra y Suelta Activo
               </span>
             </div>
-            <p className="text-xs text-[#cbd5e1] hidden sm:block">
+            <p className="text-[11px] text-[#cbd5e1] hidden lg:block">
               Monta la unidad arrastrando componentes desde la paleta superior y ajusta sus parámetros termodinámicos
             </p>
           </div>
@@ -1868,64 +1923,62 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
 
       {/* ---------------- 2. DRAGGABLE COMPONENT PALETTE (PALETA DE COMPONENTES) ---------------- */}
       {schematicMode === 'ahu_section' && (
-        <div className="panel-glass p-3 space-y-2 relative z-10">
+        <div className="panel-glass p-2 px-3 space-y-1.5 relative z-10 shrink-0">
           <div className="flex items-center justify-between text-xs">
-            <span className="font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
-              <GripVertical className="w-4 h-4 text-[#fbbf24]" />
+            <span className="font-bold text-white text-[11px] uppercase tracking-wider flex items-center gap-1.5">
+              <GripVertical className="w-3.5 h-3.5 text-[#fbbf24]" />
               <span>Paleta de Módulos (Arrastra a la UTA o pulsa '+' para añadir):</span>
             </span>
-            <div className="flex items-center gap-2.5">
+            <div className="flex items-center gap-2">
               <button
                 onClick={() => setIsAhuExampleOpen(true)}
-                className="text-[11px] font-mono text-[#38bdf8] hover:text-[#7dd3fc] flex items-center gap-1.5 bg-[#38bdf8]/10 hover:bg-[#38bdf8]/20 px-2.5 py-1 rounded border border-[#38bdf8]/30 transition-all cursor-pointer shadow-sm"
+                className="text-[10px] font-mono text-[#38bdf8] hover:text-[#7dd3fc] flex items-center gap-1 bg-[#38bdf8]/10 hover:bg-[#38bdf8]/20 px-2 py-0.5 rounded border border-[#38bdf8]/30 transition-all cursor-pointer shadow-sm"
                 title="Ver infografía con los componentes principales que componen una UTA"
               >
-                <Info className="w-3.5 h-3.5 text-[#38bdf8]" />
+                <Info className="w-3 h-3 text-[#38bdf8]" />
                 <span>¿Cómo se compone una UTA? (Ejemplo)</span>
               </button>
               <button
                 onClick={() => handleLoadArchetype('empty_canvas')}
-                className="text-[11px] font-mono text-[#fca5a5] hover:text-[#ef4444] flex items-center gap-1 px-2 py-1 rounded hover:bg-white/5"
+                className="text-[10px] font-mono text-[#fca5a5] hover:text-[#ef4444] flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-white/5 cursor-pointer"
                 title="Vaciar la UTA para montar desde cero"
               >
-                <Trash2 className="w-3 h-3" />
+                <Trash2 className="w-2.5 h-2.5" />
                 <span>Vaciar UTA</span>
               </button>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 overflow-x-auto pb-1 pt-0.5 scrollbar-thin touch-pan-x">
+          <div className="flex flex-wrap items-center gap-1.5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
             {MODULE_CATALOG.map((cat) => (
               <div
                 key={cat.type}
                 draggable={true}
                 onDragStart={(e) => handlePaletteDragStart(e, cat.type)}
                 onClick={() => insertModuleAt(cat.type, enabledModules.length)}
-                className="shrink-0 flex items-center gap-2 px-3 py-2 rounded-[6px] bg-[#1a1a1c] hover:bg-[rgba(255,255,255,0.08)] border border-[rgba(255,255,255,0.12)] hover:border-[#fbbf24] cursor-pointer active:scale-95 touch-manipulation transition-all shadow-[0_4px_6px_rgba(0,0,0,0.3)] group select-none relative hover:scale-[1.02]"
-                title={`${cat.title}: ${cat.description}\n(Toca para añadir o arrastra a la posición deseada en el corte)`}
+                className="flex items-center gap-1.5 px-2 py-1 rounded-[5px] bg-[#1a1a1c] hover:bg-[rgba(255,255,255,0.08)] border border-[rgba(255,255,255,0.12)] hover:border-[#fbbf24] cursor-pointer active:scale-95 touch-manipulation transition-all shadow-sm group select-none relative hover:scale-[1.01]"
+                title={`${cat.title}: ${cat.description}\n(Toca para añadir o arrastra al corte)`}
               >
-                <GripVertical className="w-3.5 h-3.5 text-slate-500 group-hover:text-[#fbbf24] shrink-0" />
+                <GripVertical className="w-3 h-3 text-slate-500 group-hover:text-[#fbbf24] shrink-0" />
                 <span
-                  className="w-2.5 h-2.5 rounded-full shrink-0 shadow-sm"
+                  className="w-2 h-2 rounded-full shrink-0 shadow-sm"
                   style={{ backgroundColor: cat.color }}
                 />
-                <div className="flex flex-col">
-                  <span className="text-xs font-semibold text-white group-hover:text-[#fbbf24] whitespace-nowrap">
-                    {cat.shortName}
-                  </span>
-                  <span className="text-[9px] font-mono text-[#cbd5e1]">
-                    ΔP: {cat.defaultDropPa} Pa
-                  </span>
-                </div>
+                <span className="text-[11px] font-medium text-white group-hover:text-[#fbbf24] whitespace-nowrap">
+                  {cat.shortName}
+                </span>
+                <span className="text-[9px] font-mono text-slate-400">
+                  ΔP:{cat.defaultDropPa}
+                </span>
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
                     insertModuleAt(cat.type, enabledModules.length);
                   }}
-                  className="ml-1 p-1 rounded-[4px] bg-[#0a0a0c] hover:bg-[#fbbf24] hover:text-black text-slate-400 transition-colors"
+                  className="ml-0.5 p-0.5 rounded bg-[#0a0a0c] hover:bg-[#fbbf24] hover:text-black text-slate-400 transition-colors"
                   title={`Añadir ${cat.shortName} al final del tren`}
                 >
-                  <Plus className="w-3 h-3" />
+                  <Plus className="w-2.5 h-2.5" />
                 </button>
               </div>
             ))}
@@ -1934,10 +1987,10 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
       )}
 
       {/* ---------------- 3. MAIN SVG CANVAS WITH VISUAL DROP TARGETS & REORDERING ---------------- */}
-      <div className="sticky top-0 z-30 bg-slate-900/95 backdrop-blur-xl rounded-2xl border border-slate-800 p-3 shadow-2xl relative flex flex-col items-center shrink-0">
+      <div className="bg-slate-900/95 backdrop-blur-xl rounded-xl border border-slate-800 p-2 sm:p-2.5 shadow-xl relative flex flex-col items-center shrink-0">
         {/* Top Floating Viewport Control HUD */}
         {schematicMode !== 'split_sync' && (
-          <div className="w-full flex items-center justify-between mb-3 px-1 z-20">
+          <div className="w-full flex items-center justify-between mb-1.5 px-1 z-20">
             <div className="flex items-center gap-2">
               <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse" />
               <span className="text-xs font-mono font-semibold text-slate-300 uppercase tracking-wider">
@@ -2107,10 +2160,10 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
               isWhiteTheme ? 'bg-slate-100/90 border-slate-300' : 'bg-slate-950/70 border-slate-800/80'
             } border transition-all flex items-center justify-center select-none ${
               cutViewMode === 'dual'
-                ? 'min-h-[480px] h-[520px]'
+                ? 'min-h-[380px] h-[420px]'
                 : propertiesDetailMode === 'full'
-                ? 'min-h-[350px] h-[380px] lg:h-[400px]'
-                : 'min-h-[300px] h-[330px] lg:h-[360px]'
+                ? 'min-h-[260px] h-[280px] lg:h-[300px]'
+                : 'min-h-[230px] h-[250px] lg:h-[270px]'
             } ${
               isOverAhu ? 'border-cyan-400 ring-2 ring-cyan-500/40 shadow-2xl shadow-cyan-500/20' : ''
             } ${isDraggingCanvas ? 'cursor-grabbing' : 'cursor-grab'}`}
@@ -2195,12 +2248,13 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
               getIdaeModuleTitle={getIdaeModuleTitle}
               propertiesDetailMode={propertiesDetailMode}
               onOpenEducationalGuide={handleOpenEducationalGuide}
+              isolatedModuleId={isolatedModuleId}
             />
 
             {/* Bottom Floating Hint Overlay */}
-            <div className="absolute bottom-3 left-4 z-10 hidden sm:flex items-center gap-2 text-[11px] text-slate-400 font-mono bg-slate-950/80 backdrop-blur-sm px-3 py-1.5 rounded-lg border border-slate-800/80 pointer-events-none shadow-md">
-              <Move className="w-3.5 h-3.5 text-cyan-400" />
-              <span>Arrastra componentes de la paleta superior para soltarlos en la UTA · Clic en cualquier módulo o 💡 para ver su función técnica</span>
+            <div className="absolute bottom-2 left-3 z-10 hidden sm:flex items-center gap-1.5 text-[10px] text-slate-400 font-mono bg-slate-950/80 backdrop-blur-sm px-2.5 py-1 rounded-md border border-slate-800/80 pointer-events-none shadow-md">
+              <Move className="w-3 h-3 text-cyan-400" />
+              <span>Arrastra componentes de la paleta superior para soltarlos en la UTA · Clic en cualquier módulo para ver su función técnica</span>
             </div>
           </div>
         )}
@@ -2236,25 +2290,66 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
 
         {/* Split View */}
         {schematicMode === 'split_sync' && (
-          <div className="w-full flex flex-col xl:flex-row gap-4 min-h-[640px] xl:h-[680px]">
+          <div className="w-full flex-1 flex flex-col xl:flex-row gap-3 min-h-[500px] xl:min-h-0">
             {/* Left Column: Interactive Psychrometric Chart */}
-            <div className="flex-1 h-full min-h-[380px] bg-slate-950/80 rounded-xl border border-slate-800 p-2 relative overflow-hidden flex flex-col shadow-xl">
-              <PsychrometricChart
-                points={points}
-                processes={processes}
-                selectedPointId={selectedPointId}
-                onSelectPoint={(id) => id && onSelectPoint(id)}
-                onUpdatePointCoordinates={onUpdatePointCoordinates || (() => {})}
-                onAddPointAtCoordinates={onAddPointAtCoordinates || (() => {})}
-                pressure={pressure}
-                chartType={chartType}
-                units={units}
-                layers={layers}
-              />
+            <div className="flex-1 h-full min-h-[340px] bg-slate-950/80 rounded-xl border border-slate-800 p-2 relative overflow-hidden flex flex-col shadow-xl">
+              {/* Isolation Selector Header */}
+              <div className="flex items-center justify-between pb-1.5 mb-1 border-b border-slate-800/80 px-1 shrink-0">
+                <div className="flex items-center gap-2">
+                  <div className="w-5 h-5 rounded bg-cyan-950 border border-cyan-500/40 flex items-center justify-center text-cyan-400">
+                    <Target className="w-3 h-3" />
+                  </div>
+                  <span className="text-[11px] font-bold text-white font-tech">Carta Psicrométrica RITE</span>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] text-slate-400 hidden sm:inline">Aislar transformación:</span>
+                  <select
+                    value={isolatedModuleId ?? 'all'}
+                    onChange={(e) => setIsolatedModuleId(e.target.value === 'all' ? null : e.target.value)}
+                    className="bg-slate-900 border border-slate-700 hover:border-cyan-400 rounded px-2 py-0.5 text-[10px] font-mono text-cyan-300 focus:outline-none cursor-pointer"
+                  >
+                    <option value="all">Ciclo Completo (Todos)</option>
+                    {enabledModules.map((m, idx) => {
+                      const step = ahuStepResults.steps.find((s) => s.module.id === m.id);
+                      return (
+                        <option key={m.id} value={m.id}>
+                          {idx + 1}. {m.name} {step?.isTransformation ? `(${step.processName || 'Transformación'})` : '(Isentálpico / Pasivo)'}
+                        </option>
+                      );
+                    })}
+                  </select>
+                  {isolatedModuleId && (
+                    <button
+                      onClick={() => setIsolatedModuleId(null)}
+                      className="px-1.5 py-0.5 rounded text-[10px] bg-rose-950/60 hover:bg-rose-900 border border-rose-800/60 text-rose-300 font-bold transition-colors cursor-pointer"
+                      title="Volver a mostrar el ciclo completo"
+                    >
+                      ✕ Todos
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex-1 w-full h-full relative min-h-0">
+                <PsychrometricChart
+                  points={points}
+                  processes={processes}
+                  selectedPointId={selectedPointId}
+                  onSelectPoint={(id) => id && onSelectPoint(id)}
+                  onUpdatePointCoordinates={onUpdatePointCoordinates || (() => {})}
+                  onAddPointAtCoordinates={onAddPointAtCoordinates || (() => {})}
+                  pressure={pressure}
+                  chartType={chartType}
+                  units={units}
+                  layers={layers}
+                  isolatedProcessInfo={isolatedProcessInfo}
+                />
+              </div>
             </div>
 
             {/* Right Column: Assembled Modular Sections of AHU & Thermodynamic Balance */}
-            <div className="flex-1 h-full min-h-[460px] bg-slate-950/90 rounded-xl border border-slate-800 p-3 flex flex-col shadow-xl gap-2.5 overflow-y-auto scrollbar-thin">
+            <div className="flex-1 h-full min-h-[380px] bg-slate-950/90 rounded-xl border border-slate-800 p-2.5 sm:p-3 flex flex-col shadow-xl gap-2 overflow-hidden">
               {/* Header */}
               <div className="flex items-center justify-between pb-2 border-b border-slate-800/80">
                 <div className="flex items-center gap-2">
@@ -2319,8 +2414,8 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
                 </div>
               </div>
 
-              {/* Longitudinal Cut Graphic (SVG Canvas) */}
-              <div className={`w-full flex-1 min-h-[240px] max-h-[340px] relative overflow-hidden rounded-lg ${
+              {/* Longitudinal Cut Graphic (SVG Canvas) - Expanded visual area */}
+              <div className={`w-full flex-1 min-h-[280px] relative overflow-hidden rounded-lg ${
                 isWhiteTheme ? 'bg-slate-100/90 border-slate-300' : 'bg-slate-950/70 border-slate-800/80'
               } border flex items-center justify-center p-1`}>
                 <AhuLongitudinalSvg
@@ -2348,99 +2443,33 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
                   getIdaeModuleTitle={getIdaeModuleTitle}
                   isSplit={true}
                   propertiesDetailMode={propertiesDetailMode}
+                  isolatedModuleId={isolatedModuleId}
                 />
               </div>
 
-              {/* Horizontal Strip of Assembled Modular Sections with Step Points */}
-              <div className="space-y-1">
-                <div className="flex items-center justify-between text-[11px] font-mono text-slate-400">
-                  <span className="flex items-center gap-1 font-semibold text-slate-300">
-                    <Sliders className="w-3 h-3 text-cyan-400" />
-                    <span>Secciones y Transformaciones en Cascada</span>
+              {/* Fused Thermodynamic Balance Summary Bar */}
+              <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 bg-slate-950/80 rounded-xl border border-slate-800 text-xs font-mono shrink-0 shadow-md">
+                <div className="flex items-center gap-3 sm:gap-4 flex-wrap">
+                  <span className="text-slate-400 flex items-center gap-1.5 text-[11px]">
+                    <Activity className="w-3.5 h-3.5 text-cyan-400" />
+                    <span className="text-slate-200 font-bold">Balance UTA:</span>
                   </span>
-                  <span className="text-[10px] text-slate-500">Clic en módulo para editar parámetros</span>
+                  <span className="text-[11px] text-slate-300">
+                    Frío: <strong className="text-cyan-400 font-bold">{coolingPowerKW.toFixed(1)} kW</strong>
+                  </span>
+                  <span className="text-[11px] text-slate-300">
+                    Calor: <strong className="text-amber-400 font-bold">{heatingPowerKW.toFixed(1)} kW</strong>
+                  </span>
+                  <span className="text-[11px] text-slate-300">
+                    Condensados: <strong className="text-emerald-400 font-bold">{condensateLitersPerHour.toFixed(2)} L/h</strong>
+                  </span>
+                  <span className="text-[11px] text-slate-300">
+                    ΔP Total: <strong className="text-rose-400 font-bold">{totalPressureDropPa} Pa</strong>
+                  </span>
                 </div>
-
-                <div className="flex items-center gap-2 overflow-x-auto pb-1 pt-0.5 scrollbar-thin">
-                  {ahuSteps.map((step, idx) => {
-                    const isSelected = editingModuleId === step.module.id || selectedPointId === step.associatedPointId;
-                    return (
-                      <div
-                        key={`split-step-${step.module.id}-${idx}`}
-                        onClick={() => handleSelectModuleAndPoint(step.module.id, step.associatedPointId)}
-                        className={`flex-shrink-0 cursor-pointer p-2 rounded-lg border transition-all flex flex-col justify-between w-[130px] ${
-                          isSelected
-                            ? 'bg-cyan-950/60 border-cyan-400 shadow-md shadow-cyan-500/20 ring-1 ring-cyan-500/40'
-                            : 'bg-slate-900/80 border-slate-800 hover:border-slate-700 hover:bg-slate-900'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between gap-1 mb-1">
-                          <span className="text-[10px] font-mono font-bold text-slate-500">#{idx + 1}</span>
-                          <span
-                            className="text-[9px] font-mono font-bold px-1.5 py-0.2 rounded"
-                            style={{
-                              backgroundColor: `${step.associatedPointColor}20`,
-                              color: step.associatedPointColor,
-                              border: `1px solid ${step.associatedPointColor}40`,
-                            }}
-                          >
-                            {step.isTransformation ? 'Transform.' : 'Paso'}
-                          </span>
-                        </div>
-
-                        <div className="text-xs font-bold text-white truncate font-tech" title={step.module.name}>
-                          {getIdaeModuleTitle(step.module)}
-                        </div>
-
-                        <div className="text-[10px] font-mono text-cyan-300 mt-1 flex items-center justify-between">
-                          <span>{step.exitPoint.tdb.toFixed(1)}°C</span>
-                          <span className="text-slate-400">{step.exitPoint.rh.toFixed(0)}% HR</span>
-                        </div>
-
-                        {step.isTransformation && (
-                          <div className="text-[9px] font-mono text-amber-400 mt-0.5 truncate">
-                            {step.processType === 'cooling_dehumid'
-                              ? `−${(step.metrics?.qTotal ?? 0).toFixed(1)} kW Frío`
-                              : step.processType === 'sensible_heating'
-                              ? `+${(step.metrics?.qSensible ?? 0).toFixed(1)} kW Calor`
-                              : step.processType === 'heat_recovery'
-                              ? `η ${step.module.params.recoveryEfficiency ?? 75}% Recup.`
-                              : step.processType === 'mixing'
-                              ? `${Math.round((step.module.params.outdoorRatio ?? 0.3) * 100)}% ODA`
-                              : `${step.module.pressureDropPa} Pa`}
-                          </div>
-                        )}
-                        {!step.isTransformation && (
-                          <div className="text-[9px] font-mono text-slate-500 mt-0.5">
-                            ΔP: {step.module.pressureDropPa} Pa
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Bottom Thermodynamic Balance Summary */}
-              <div className="p-2.5 bg-slate-900/90 rounded-xl border border-slate-800 text-xs">
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 font-mono">
-                  <div className="bg-slate-950/60 p-1.5 rounded-lg border border-slate-800/80">
-                    <span className="text-[10px] text-slate-500 block">Potencia Frío:</span>
-                    <span className="text-xs font-bold text-cyan-400">{coolingPowerKW.toFixed(1)} kW</span>
-                  </div>
-                  <div className="bg-slate-950/60 p-1.5 rounded-lg border border-slate-800/80">
-                    <span className="text-[10px] text-slate-500 block">Potencia Calor:</span>
-                    <span className="text-xs font-bold text-amber-400">{heatingPowerKW.toFixed(1)} kW</span>
-                  </div>
-                  <div className="bg-slate-950/60 p-1.5 rounded-lg border border-slate-800/80">
-                    <span className="text-[10px] text-slate-500 block">Condensados:</span>
-                    <span className="text-xs font-bold text-emerald-400">{condensateLitersPerHour.toFixed(2)} L/h</span>
-                  </div>
-                  <div className="bg-slate-950/60 p-1.5 rounded-lg border border-slate-800/80">
-                    <span className="text-[10px] text-slate-500 block">Pérdida Carga Total:</span>
-                    <span className="text-xs font-bold text-rose-400">{totalPressureDropPa} Pa</span>
-                  </div>
-                </div>
+                <span className="text-[10px] text-slate-500 hidden sm:inline">
+                  Clic en cualquier sección para configurar
+                </span>
               </div>
             </div>
           </div>
@@ -2450,38 +2479,70 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
 
       {/* ---------------- 4. PARAMETER CONFIGURATION DRAWER (FOR CLICKED / DROPPED MODULE) ---------------- */}
       {activeEditingModule && (
-        <div className="panel-glass p-4 border border-[#fbbf24]/40 shadow-glow space-y-3">
-          <div className="flex items-center justify-between pb-2 border-b border-[rgba(255,255,255,0.1)]">
-            <div className="flex items-center gap-2.5">
-              <div className="w-7 h-7 rounded-[4px] bg-[#fbbf24] text-black flex items-center justify-center font-bold">
-                <Settings className="w-4 h-4" />
+        <div className="panel-glass p-2.5 sm:p-3 border border-[#fbbf24]/40 shadow-glow space-y-2 shrink-0">
+          <div className="flex items-center justify-between pb-1.5 border-b border-[rgba(255,255,255,0.1)]">
+            <div className="flex items-center gap-2">
+              <div className="w-6 h-6 rounded-[4px] bg-[#fbbf24] text-black flex items-center justify-center font-bold shrink-0">
+                <Settings className="w-3.5 h-3.5" />
               </div>
               <div>
-                <h4 className="text-sm font-bold text-white flex items-center gap-2">
-                  <span>Configuración de Parámetros: {activeEditingModule.name}</span>
-                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-[4px] bg-[#0a0a0c] text-[#fbbf24] border border-[#fbbf24]/30">
-                    Tipo: {activeEditingModule.type}
+                <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
+                  <span>Configuración: {activeEditingModule.name}</span>
+                  <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-[#0a0a0c] text-[#fbbf24] border border-[#fbbf24]/30">
+                    {activeEditingModule.type}
                   </span>
                 </h4>
-                <p className="text-[11px] text-[#cbd5e1]">
-                  Ajusta los valores de diseño termodinámico; se calculan potencias y se sincronizan con el diagrama psicrométrico
-                </p>
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setIsDrawerCollapsed(!isDrawerCollapsed)}
+                className="p-1 rounded-[5px] text-slate-300 hover:text-[#fbbf24] hover:bg-white/10 transition-colors flex items-center gap-1 text-[11px] font-mono px-2"
+                title={isDrawerCollapsed ? 'Expandir configuración' : 'Minimizar configuración'}
+              >
+                {isDrawerCollapsed ? (
+                  <>
+                    <ChevronDown className="w-3.5 h-3.5 text-[#fbbf24]" />
+                    <span>Expandir</span>
+                  </>
+                ) : (
+                  <>
+                    <ChevronUp className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Minimizar</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                onClick={() => handleToggleIsolateModule(activeEditingModule.id)}
+                className={`text-[11px] px-2.5 py-0.5 rounded-[5px] font-mono font-semibold transition-all flex items-center gap-1.5 cursor-pointer ${
+                  isolatedModuleId === activeEditingModule.id
+                    ? 'bg-cyan-500 text-slate-950 font-bold shadow-md shadow-cyan-500/30 border border-cyan-400'
+                    : 'bg-cyan-950/40 text-cyan-400 border border-cyan-700/50 hover:bg-cyan-900/50'
+                }`}
+                title="Aislar la transformación termodinámica de este módulo en el Diagrama Psicrométrico"
+              >
+                <Target className="w-3 h-3" />
+                <span>
+                  {isolatedModuleId === activeEditingModule.id
+                    ? 'Aislado en Carta (Ver Todo)'
+                    : 'Aislar en Carta'}
+                </span>
+              </button>
+
               <button
                 onClick={() => handleDuplicateModule(activeEditingModule.id)}
-                className="btn-secondary text-[11px] !py-1"
+                className="btn-secondary text-[11px] !py-0.5 !px-2"
                 title="Duplicar este módulo"
               >
-                <Copy className="w-3.5 h-3.5" />
+                <Copy className="w-3 h-3" />
                 <span className="hidden sm:inline">Duplicar</span>
               </button>
 
               <button
                 onClick={() => handleToggleModule(activeEditingModule.id)}
-                className={`text-xs px-2.5 py-1 rounded-[6px] font-mono font-semibold transition-colors ${
+                className={`text-[11px] px-2 py-0.5 rounded-[5px] font-mono font-semibold transition-colors ${
                   activeEditingModule.enabled
                     ? 'bg-[#65a30d]/20 text-[#a3e635] border border-[#65a30d]/60'
                     : 'bg-[#1a1a1c] text-slate-500 border border-[rgba(255,255,255,0.1)]'
@@ -2492,20 +2553,24 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
 
               <button
                 onClick={() => handleRemoveModule(activeEditingModule.id)}
-                className="btn-secondary text-[11px] !py-1 !text-[#fca5a5] !border-[#ef4444]/40 hover:!border-[#ef4444]"
+                className="btn-secondary text-[11px] !py-0.5 !px-1.5 !text-[#fca5a5] !border-[#ef4444]/40 hover:!border-[#ef4444]"
                 title="Eliminar este módulo de la UTA"
               >
-                <Trash2 className="w-3.5 h-3.5" />
+                <Trash2 className="w-3 h-3" />
               </button>
 
               <button
                 onClick={() => setEditingModuleId(null)}
-                className="p-1.5 rounded-[6px] text-[#cbd5e1] hover:text-white hover:bg-[rgba(255,255,255,0.1)]"
+                className="p-1 rounded-[5px] text-[#cbd5e1] hover:text-white hover:bg-[rgba(255,255,255,0.1)]"
+                title="Cerrar panel de configuración"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
             </div>
           </div>
+
+          {!isDrawerCollapsed && (
+            <>
 
           {/* Detailed Thermodynamic Changes Generated by this Module */}
           {(() => {
@@ -2559,6 +2624,21 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
                     </span>
                   </div>
                 </div>
+
+                {!step.isTransformation && (
+                  <div className="bg-amber-950/30 border border-amber-800/40 rounded-lg p-2 text-[11px] font-mono text-amber-300 flex items-center justify-between gap-2">
+                    <span>
+                      ℹ️ Módulo pasivo isentálpico: el estado psicrométrico permanece inalterado (ΔT = 0, Δw = 0, Δh = 0). Aporta una pérdida de carga estática de {activeEditingModule.pressureDropPa} Pa.
+                    </span>
+                    <button
+                      onClick={() => handleToggleIsolateModule(activeEditingModule.id)}
+                      className="px-2 py-0.5 rounded bg-cyan-950 border border-cyan-500/50 text-cyan-300 hover:text-white text-[10px] whitespace-nowrap cursor-pointer flex items-center gap-1"
+                    >
+                      <Target className="w-3 h-3" />
+                      <span>Ver en Carta</span>
+                    </button>
+                  </div>
+                )}
               </div>
             );
           })()}
@@ -2842,6 +2922,8 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
               </div>
             )}
           </div>
+          </>
+        )}
         </div>
       )}
 

@@ -48,14 +48,14 @@ export const TopBar: React.FC<TopBarProps> = ({
   onOpenIdaeModal,
 }) => {
   return (
-    <header className="h-14 bg-[#0a0a0c]/90 backdrop-blur-md border-b border-[rgba(255,255,255,0.1)] px-5 flex items-center justify-between shrink-0 select-none z-30 font-primary">
+    <header className="h-12 bg-[#0a0a0c]/90 backdrop-blur-md border-b border-[rgba(255,255,255,0.1)] px-3 sm:px-4 flex items-center justify-between shrink-0 select-none z-30 font-primary">
       {/* Zone 1: Brand title, one line wordmark */}
-      <div className="flex items-center gap-2.5">
-        <div className="w-8 h-8 rounded-[6px] bg-[#fbbf24] text-black flex items-center justify-center font-bold text-base shadow-[0_0_10px_rgba(251,191,36,0.3)]">
+      <div className="flex items-center gap-2">
+        <div className="w-7 h-7 rounded-[5px] bg-[#fbbf24] text-black flex items-center justify-center font-bold text-sm shadow-[0_0_8px_rgba(251,191,36,0.3)]">
           Ψ
         </div>
-        <span className="text-[17px] font-bold tracking-tight text-white">
-          PsychroStudio <span className="text-[#fbbf24] font-normal text-xs ml-1 font-mono">PRO</span>
+        <span className="text-[15px] font-bold tracking-tight text-white">
+          PsychroStudio <span className="text-[#fbbf24] font-normal text-xs ml-0.5 font-mono">PRO</span>
         </span>
       </div>
 

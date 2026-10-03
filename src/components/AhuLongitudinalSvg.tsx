@@ -35,6 +35,7 @@ export interface AhuLongitudinalSvgProps {
   getIdaeModuleTitle: (mod: AHUModuleItem) => string;
   isSplit?: boolean;
   propertiesDetailMode?: 'full' | 'compact' | 'hover';
+  isolatedModuleId?: string | null;
 }
 
 export const MODULE_SPACING = 0;
@@ -67,6 +68,7 @@ export const AhuLongitudinalSvg: React.FC<AhuLongitudinalSvgProps> = ({
   getIdaeModuleTitle,
   isSplit = false,
   propertiesDetailMode = 'hover',
+  isolatedModuleId = null,
 }) => {
   const [hoveredTransition, setHoveredTransition] = useState<number | null>(null);
 
@@ -463,10 +465,12 @@ export const AhuLongitudinalSvg: React.FC<AhuLongitudinalSvgProps> = ({
 
               if (mod.type === 'cooling_coil') {
                 badgeThemeColor = '#0284C7';
-                deltaText = `❄ ΔT: ${deltaTdb.toFixed(1)}° · ΔHR: +${Math.abs(deltaRh).toFixed(0)}%`;
+                const qKw = step?.metrics?.qTotal;
+                deltaText = qKw ? `❄ −${qKw.toFixed(1)} kW · ΔT: ${deltaTdb.toFixed(1)}°` : `❄ ΔT: ${deltaTdb.toFixed(1)}° · ΔHR: +${Math.abs(deltaRh).toFixed(0)}%`;
               } else if (mod.type === 'heating_coil' || mod.type === 'electric_heater') {
                 badgeThemeColor = '#EF4444';
-                deltaText = `🔥 ΔT: +${deltaTdb.toFixed(1)}° · w=cte`;
+                const qKw = step?.metrics?.qSensible;
+                deltaText = qKw ? `🔥 +${qKw.toFixed(1)} kW · ΔT: +${deltaTdb.toFixed(1)}°` : `🔥 ΔT: +${deltaTdb.toFixed(1)}° · w=cte`;
               } else if (mod.type === 'mixing_box') {
                 badgeThemeColor = '#F59E0B';
                 const rPct = Math.round((mod.params.outdoorRatio ?? 0.3) * 100);
@@ -542,6 +546,23 @@ export const AhuLongitudinalSvg: React.FC<AhuLongitudinalSvgProps> = ({
                       }
                       strokeWidth={isModActive || isStepPointSelected ? '2' : '1'}
                     />
+
+                    {/* Glowing highlight border when isolated in psychrometric chart */}
+                    {isolatedModuleId === mod.id && (
+                      <rect
+                        x="-2"
+                        y="-2"
+                        width={modWidth + 4}
+                        height="178"
+                        rx="3"
+                        fill="none"
+                        stroke="#38BDF8"
+                        strokeWidth="2.5"
+                        strokeDasharray="4,2"
+                        className="animate-pulse pointer-events-none"
+                        filter="drop-shadow(0 0 8px rgba(56,189,248,0.8))"
+                      />
+                    )}
 
                     {/* Official IDAE Section Technical Symbol */}
                     <g className="transition-transform group-hover:scale-[1.005] transform-origin-center">
@@ -642,43 +663,28 @@ export const AhuLongitudinalSvg: React.FC<AhuLongitudinalSvgProps> = ({
                       </g>
                     )}
 
-                    {/* Canonical IDAE Header Title on top of module with 💡 Educational trigger */}
+                    {/* Canonical IDAE Header Title on top of module */}
                     {getIdaeModuleTitle(mod) && (
                       <g>
                         <text
                           x={modWidth / 2}
                           y="-12"
                           textAnchor="middle"
-                          fill={isStepPointSelected ? '#0284C7' : isWhiteTheme ? '#000000' : '#E2E8F0'}
+                          fill={isolatedModuleId === mod.id ? '#38BDF8' : isStepPointSelected ? '#0284C7' : isWhiteTheme ? '#000000' : '#E2E8F0'}
                           fontSize="13.5"
                           fontWeight="bold"
                           fontFamily="Plus Jakarta Sans"
                         >
                           {getIdaeModuleTitle(mod)}
                         </text>
-
-                        {/* Educational Lightbulb Trigger 💡 */}
-                        <g
-                          transform={`translate(${modWidth / 2 + Math.min(54, getIdaeModuleTitle(mod).length * 4.4) + 4}, -22)`}
-                          className="cursor-pointer hover:scale-125 transition-transform"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onOpenEducationalGuide?.(mod.id);
-                          }}
-                        >
-                          <rect
-                            x="-2"
-                            y="0"
-                            width="18"
-                            height="15"
-                            rx="4"
-                            fill={isWhiteTheme ? '#FEF3C7' : '#0B132B'}
-                            stroke="#F59E0B"
-                            strokeWidth="0.8"
-                            opacity="0.9"
-                          />
-                          <text x="7" y="11" textAnchor="middle" fontSize="9.5">💡</text>
-                        </g>
+                        {isolatedModuleId === mod.id && (
+                          <g transform={`translate(${modWidth / 2}, -30)`}>
+                            <rect x="-44" y="-9" width="88" height="15" rx="3" fill="#0369A1" stroke="#38BDF8" strokeWidth="1" filter="drop-shadow(0 2px 4px rgba(0,0,0,0.5))" />
+                            <text x="0" y="2" textAnchor="middle" fill="#FFFFFF" fontSize="8" fontWeight="bold" fontFamily="JetBrains Mono">
+                              🎯 AISLADO EN CARTA
+                            </text>
+                          </g>
+                        )}
                       </g>
                     )}
                   </g>
@@ -1082,6 +1088,21 @@ export const AhuLongitudinalSvg: React.FC<AhuLongitudinalSvgProps> = ({
                       }
                       strokeWidth={isModActive ? '2.5' : '1.2'}
                     />
+                    {isolatedModuleId === mod.id && (
+                      <rect
+                        x="-2"
+                        y="-2"
+                        width={modWidth + 4}
+                        height="178"
+                        rx="5"
+                        fill="none"
+                        stroke="#38BDF8"
+                        strokeWidth="2.5"
+                        strokeDasharray="4,2"
+                        className="animate-pulse pointer-events-none"
+                        filter="drop-shadow(0 0 8px rgba(56,189,248,0.8))"
+                      />
+                    )}
                     <IDAESectionSymbol
                       mod={mod}
                       modWidth={modWidth}

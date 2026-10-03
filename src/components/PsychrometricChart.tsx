@@ -6,6 +6,7 @@ import {
   ChartLayerVisibility,
   ChartType,
   UnitSystem,
+  IsolatedProcessInfo,
 } from '../types/psychrometrics';
 import {
   getSaturationHumidityRatio,
@@ -46,6 +47,9 @@ import {
   FileText,
   Activity,
   Check,
+  Target,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 
 interface PsychrometricChartProps {
@@ -59,6 +63,7 @@ interface PsychrometricChartProps {
   chartType: ChartType;
   units: UnitSystem;
   layers: ChartLayerVisibility;
+  isolatedProcessInfo?: IsolatedProcessInfo | null;
 }
 
 // Geometric helpers for anti-collision label layout
@@ -156,12 +161,48 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
   chartType,
   units,
   layers,
+  isolatedProcessInfo,
 }) => {
   const svgRef = useRef<SVGSVGElement | null>(null);
 
   // SVG Canvas dimensions tightly tailored to fill window
   const viewBoxWidth = 1200;
   const viewBoxHeight = 740;
+
+  // Toggle to dim rather than completely hide non-isolated cycle points/processes
+  const [dimOtherProcesses, setDimOtherProcesses] = useState<boolean>(false);
+
+  // Check if a point belongs to the isolated module process
+  const isPointIsolated = useCallback(
+    (ptId: string) => {
+      if (!isolatedProcessInfo) return true;
+      if (isolatedProcessInfo.isPassive) {
+        return ptId === isolatedProcessInfo.entryPoint.id;
+      }
+      return (
+        ptId === isolatedProcessInfo.entryPoint.id ||
+        ptId === isolatedProcessInfo.exitPoint.id ||
+        (isolatedProcessInfo.secondaryEntryPoint && ptId === isolatedProcessInfo.secondaryEntryPoint.id)
+      );
+    },
+    [isolatedProcessInfo]
+  );
+
+  // Check if a process connection belongs to the isolated module process
+  const isProcessIsolated = useCallback(
+    (proc: ProcessConnection) => {
+      if (!isolatedProcessInfo) return true;
+      if (isolatedProcessInfo.isPassive) return false;
+      if (isolatedProcessInfo.process) {
+        return proc.id === isolatedProcessInfo.process.id;
+      }
+      return (
+        proc.fromPointId === isolatedProcessInfo.entryPoint.id &&
+        proc.toPointId === isolatedProcessInfo.exitPoint.id
+      );
+    },
+    [isolatedProcessInfo]
+  );
 
   // Official Chart Theme: 'ashrae_classic' (Canonical Green on technical paper), 'valcon_color' (Polychrome), or 'dark_blueprint' (CAD)
   const [chartTheme, setChartTheme] = useState<'ashrae_classic' | 'valcon_color' | 'dark_blueprint'>('ashrae_classic');
@@ -1507,6 +1548,71 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
         </div>
       )}
 
+      {/* Floating Isolated Process HUD Banner */}
+      {isolatedProcessInfo && (
+        <div className="absolute top-11 left-3 right-3 z-30 flex flex-wrap items-center justify-between gap-2 bg-slate-950/95 border border-cyan-500/50 rounded-xl px-3 py-1.5 shadow-2xl backdrop-blur-md text-xs font-mono animate-in fade-in duration-200">
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-cyan-950/80 border border-cyan-500/50 text-cyan-300 font-bold">
+              <Target className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
+              <span>{isolatedProcessInfo.moduleName}</span>
+            </div>
+
+            {isolatedProcessInfo.isPassive ? (
+              <span className="text-amber-300 text-[11px] bg-amber-950/50 border border-amber-800/40 px-2 py-0.5 rounded">
+                Módulo Pasivo: Sin transformación psicrométrica (ΔT = 0, Δw = 0, Δh = 0) · Pérdida de carga ΔP: {isolatedProcessInfo.pressureDropPa ?? 0} Pa
+              </span>
+            ) : (
+              <div className="flex items-center gap-2 text-[11px] text-slate-300 flex-wrap">
+                <span className="text-slate-400">
+                  {isolatedProcessInfo.entryPoint.name}: <strong className="text-cyan-300">{isolatedProcessInfo.entryPoint.tdb.toFixed(1)}°C, {isolatedProcessInfo.entryPoint.rh.toFixed(0)}%</strong>
+                </span>
+                <span className="text-cyan-400 font-bold">→</span>
+                <span className="text-slate-400">
+                  {isolatedProcessInfo.exitPoint.name}: <strong className="text-cyan-300">{isolatedProcessInfo.exitPoint.tdb.toFixed(1)}°C, {isolatedProcessInfo.exitPoint.rh.toFixed(0)}%</strong>
+                </span>
+                <span className="text-slate-600">|</span>
+                <span>
+                  ΔT: <strong className={isolatedProcessInfo.exitPoint.tdb - isolatedProcessInfo.entryPoint.tdb < 0 ? 'text-cyan-400' : 'text-rose-400'}>
+                    {isolatedProcessInfo.exitPoint.tdb - isolatedProcessInfo.entryPoint.tdb > 0 ? '+' : ''}{(isolatedProcessInfo.exitPoint.tdb - isolatedProcessInfo.entryPoint.tdb).toFixed(1)}°C
+                  </strong>
+                </span>
+                <span>
+                  Δw: <strong className="text-emerald-400">
+                    {((isolatedProcessInfo.exitPoint.w - isolatedProcessInfo.entryPoint.w) * 1000).toFixed(2)} g/kg
+                  </strong>
+                </span>
+                {isolatedProcessInfo.process && (
+                  <span>
+                    Q: <strong className="text-amber-400">{Math.abs(isolatedProcessInfo.process.qTotal).toFixed(1)} kW</strong>
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-center gap-1.5 ml-auto">
+            <button
+              onClick={() => setDimOtherProcesses(!dimOtherProcesses)}
+              className="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-700 text-[10px] text-slate-300 flex items-center gap-1 transition-colors cursor-pointer"
+              title={dimOtherProcesses ? "Ocultar por completo las demás transformaciones" : "Mostrar el resto del ciclo atenuado"}
+            >
+              {dimOtherProcesses ? <EyeOff className="w-3 h-3 text-cyan-400" /> : <Eye className="w-3 h-3 text-slate-400" />}
+              <span>{dimOtherProcesses ? "Solo este proceso" : "Ver contexto"}</span>
+            </button>
+
+            {isolatedProcessInfo.onClearIsolation && (
+              <button
+                onClick={isolatedProcessInfo.onClearIsolation}
+                className="px-2 py-0.5 rounded bg-rose-950/70 hover:bg-rose-900 border border-rose-800/60 text-[10px] text-rose-300 font-bold transition-colors cursor-pointer flex items-center gap-1"
+                title="Volver a mostrar el ciclo completo con todas las transformaciones"
+              >
+                <span>✕ Ver Ciclo Completo</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Main SVG Canvas: Diagram takes full container width and height */}
       <svg
         ref={svgRef}
@@ -1782,6 +1888,11 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
           {layers.processes && (
             <g className="processes-layer">
               {processes.map((proc) => {
+                const isIsolated = isProcessIsolated(proc);
+                if (isolatedProcessInfo && !isIsolated && !dimOtherProcesses) {
+                  return null;
+                }
+
                 const ptFrom = points.find((p) => p.id === proc.fromPointId);
                 const ptTo = points.find((p) => p.id === proc.toPointId);
                 if (!ptFrom || !ptTo) return null;
@@ -1791,9 +1902,11 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
 
                 const procColor = proc.color || (themeStyles.isDark ? '#38BDF8' : '#0284C7');
                 const placedBadge = labelLayout.placedProcessLabels.find((l) => l.processId === proc.id);
+                const lineOpacity = isolatedProcessInfo && !isIsolated ? 0.12 : 1;
+                const lineWidth = isIsolated && isolatedProcessInfo ? '5' : '3.5';
 
                 return (
-                  <g key={proc.id}>
+                  <g key={proc.id} opacity={lineOpacity}>
                     {/* Process Line */}
                     <line
                       x1={x1}
@@ -1801,9 +1914,10 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
                       x2={x2}
                       y2={y2}
                       stroke={procColor}
-                      strokeWidth="3.5"
+                      strokeWidth={lineWidth}
                       strokeDasharray={proc.type === 'zone_load' ? '6,3' : undefined}
                       markerEnd={proc.type === 'mixing' ? 'url(#process-arrow-amber)' : 'url(#process-arrow)'}
+                      filter={isIsolated && isolatedProcessInfo ? 'drop-shadow(0 0 6px rgba(56,189,248,0.8))' : undefined}
                     />
 
                     {/* Anti-collision Leader Line (if badge is offset from line) */}
@@ -1854,10 +1968,173 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
             </g>
           )}
 
+          {/* Isolated Process Sensible / Latent Decomposition Triangle */}
+          {isolatedProcessInfo && !isolatedProcessInfo.isPassive && (() => {
+            const entry = isolatedProcessInfo.entryPoint;
+            const exit = isolatedProcessInfo.exitPoint;
+            const [p1x, p1y] = coordToPixel(entry.tdb, entry.w);
+            const [p2x, p2y] = coordToPixel(exit.tdb, exit.w);
+            const [pInterX, pInterY] = coordToPixel(exit.tdb, entry.w);
+
+            const deltaT = exit.tdb - entry.tdb;
+            const deltaW = (exit.w - entry.w) * 1000;
+
+            const isSignificantDeltaW = Math.abs(deltaW) > 0.05;
+            const isSignificantDeltaT = Math.abs(deltaT) > 0.1;
+
+            return (
+              <g className="isolated-decomposition-triangle pointer-events-none">
+                {/* Sensible component horizontal leg */}
+                {isSignificantDeltaT && (
+                  <g>
+                    <line
+                      x1={p1x}
+                      y1={p1y}
+                      x2={pInterX}
+                      y2={pInterY}
+                      stroke={deltaT < 0 ? '#38BDF8' : '#F97316'}
+                      strokeWidth="2"
+                      strokeDasharray="4,3"
+                      opacity="0.9"
+                    />
+                    <rect
+                      x={(p1x + pInterX) / 2 - 45}
+                      y={p1y - 18}
+                      width="90"
+                      height="15"
+                      rx="3"
+                      fill={themeStyles.plotBg}
+                      stroke={deltaT < 0 ? '#38BDF8' : '#F97316'}
+                      strokeWidth="1"
+                      opacity="0.92"
+                    />
+                    <text
+                      x={(p1x + pInterX) / 2}
+                      y={p1y - 7}
+                      textAnchor="middle"
+                      fill={deltaT < 0 ? '#38BDF8' : '#F97316'}
+                      fontSize="9"
+                      fontWeight="bold"
+                      fontFamily="JetBrains Mono"
+                    >
+                      ΔT: {deltaT > 0 ? '+' : ''}{deltaT.toFixed(1)}°C (Sensible)
+                    </text>
+                  </g>
+                )}
+
+                {/* Latent component vertical leg */}
+                {isSignificantDeltaW && (
+                  <g>
+                    <line
+                      x1={pInterX}
+                      y1={pInterY}
+                      x2={p2x}
+                      y2={p2y}
+                      stroke="#10B981"
+                      strokeWidth="2"
+                      strokeDasharray="4,3"
+                      opacity="0.9"
+                    />
+                    <rect
+                      x={pInterX + 6}
+                      y={(pInterY + p2y) / 2 - 8}
+                      width="106"
+                      height="15"
+                      rx="3"
+                      fill={themeStyles.plotBg}
+                      stroke="#10B981"
+                      strokeWidth="1"
+                      opacity="0.92"
+                    />
+                    <text
+                      x={pInterX + 59}
+                      y={(pInterY + p2y) / 2 + 3}
+                      textAnchor="middle"
+                      fill="#10B981"
+                      fontSize="9"
+                      fontWeight="bold"
+                      fontFamily="JetBrains Mono"
+                    >
+                      Δw: {deltaW > 0 ? '+' : ''}{deltaW.toFixed(2)} g/kg (Latente)
+                    </text>
+                  </g>
+                )}
+
+                {/* Corner indicator circle */}
+                {isSignificantDeltaW && isSignificantDeltaT && (
+                  <circle cx={pInterX} cy={pInterY} r="3" fill="#F59E0B" />
+                )}
+              </g>
+            );
+          })()}
+
+          {/* Passive Module Isenthalpic Indicator (Prefilter, damper, silencer) */}
+          {isolatedProcessInfo && isolatedProcessInfo.isPassive && (() => {
+            const entry = isolatedProcessInfo.entryPoint;
+            const [px, py] = coordToPixel(entry.tdb, entry.w);
+
+            return (
+              <g className="isolated-passive-indicator pointer-events-none">
+                <circle
+                  cx={px}
+                  cy={py}
+                  r="22"
+                  fill="none"
+                  stroke="#F59E0B"
+                  strokeWidth="2.5"
+                  strokeDasharray="5,3"
+                  className="animate-spin"
+                  style={{ animationDuration: '8s' }}
+                />
+                <circle cx={px} cy={py} r="13" fill="#F59E0B" fillOpacity="0.2" stroke="#F59E0B" strokeWidth="2" />
+
+                {/* Informative Callout Card */}
+                <g transform={`translate(${px + 18}, ${py - 44})`}>
+                  <rect
+                    x="0"
+                    y="0"
+                    width="240"
+                    height="42"
+                    rx="6"
+                    fill={themeStyles.plotBg}
+                    stroke="#F59E0B"
+                    strokeWidth="1.5"
+                    opacity="0.95"
+                    filter={themeStyles.isDark ? 'drop-shadow(0 2px 8px rgba(0,0,0,0.7))' : 'drop-shadow(0 1px 4px rgba(0,0,0,0.2))'}
+                  />
+                  <text
+                    x="10"
+                    y="16"
+                    fill="#F59E0B"
+                    fontSize="10"
+                    fontWeight="bold"
+                    fontFamily="Plus Jakarta Sans, sans-serif"
+                  >
+                    {isolatedProcessInfo.moduleName} (Isentálpico)
+                  </text>
+                  <text
+                    x="10"
+                    y="31"
+                    fill={themeStyles.axisText}
+                    fontSize="9"
+                    fontFamily="JetBrains Mono"
+                  >
+                    ΔT = 0,0 °C · Δw = 0,0 g/kg · ΔP = {isolatedProcessInfo.pressureDropPa ?? 0} Pa
+                  </text>
+                </g>
+              </g>
+            );
+          })()}
+
           {/* Interactive State Points */}
           <g className="state-points-layer">
             {/* 1. Point markers and selection halos */}
             {points.map((pt) => {
+              const isPtIsolated = isPointIsolated(pt.id);
+              if (isolatedProcessInfo && !isPtIsolated && !dimOtherProcesses) {
+                return null;
+              }
+              const ptOpacity = isolatedProcessInfo && !isPtIsolated ? 0.15 : 1;
               const [px, py] = coordToPixel(pt.tdb, pt.w);
               const isSelected = pt.id === selectedPointId;
 
@@ -1865,7 +2142,8 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
                 <g
                   key={pt.id}
                   transform={`translate(${px}, ${py})`}
-                  className="cursor-pointer"
+                  className={isolatedProcessInfo && !isPtIsolated ? 'pointer-events-none' : 'cursor-pointer'}
+                  opacity={ptOpacity}
                   onClick={(e) => {
                     e.stopPropagation();
                     onSelectPoint(pt.id);
@@ -1903,12 +2181,18 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
               labelLayout.placedPointLabels.map((lbl) => {
                 const pt = points.find((p) => p.id === lbl.pointId);
                 if (!pt) return null;
+                const isPtIsolated = isPointIsolated(pt.id);
+                if (isolatedProcessInfo && !isPtIsolated && !dimOtherProcesses) {
+                  return null;
+                }
+                const lblOpacity = isolatedProcessInfo && !isPtIsolated ? 0.15 : 1;
                 const isSelected = pt.id === selectedPointId;
 
                 return (
                   <g
                     key={`lbl-${pt.id}`}
                     className="cursor-pointer group"
+                    opacity={lblOpacity}
                     onClick={(e) => {
                       e.stopPropagation();
                       onSelectPoint(pt.id);

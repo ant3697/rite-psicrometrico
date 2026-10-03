@@ -17,6 +17,7 @@ import {
   UnitSystem,
   AtmosphereConfig,
   PresetCycle,
+  IsolatedProcessInfo,
 } from './types/psychrometrics';
 import {
   solveStatePoint,
@@ -135,6 +136,7 @@ export default function App() {
   });
 
   const [selectedPointId, setSelectedPointId] = useState<string | null>('pt-1');
+  const [isolatedProcessInfo, setIsolatedProcessInfo] = useState<IsolatedProcessInfo | null>(null);
 
   // Recalculate processes when points or atmospheric pressure update
   const updatedProcesses = useMemo(() => {
@@ -388,7 +390,7 @@ export default function App() {
         </div>
 
         {/* Dynamic Main Stage View with responsive padding for mobile bottom bar */}
-        <main className="flex-1 h-full p-2 sm:p-3 pb-16 md:pb-3 overflow-hidden flex flex-col bg-[#0a0a0c]">
+        <main className="flex-1 h-full p-1.5 sm:p-2 pb-14 md:pb-2 overflow-hidden flex flex-col bg-[#0a0a0c]">
           {currentView === 'chart' && (
             <PsychrometricChart
               points={points}
@@ -401,6 +403,7 @@ export default function App() {
               chartType={chartType}
               units={units}
               layers={layers}
+              isolatedProcessInfo={isolatedProcessInfo}
             />
           )}
 
@@ -466,6 +469,8 @@ export default function App() {
               }}
               onOpenIdaeModal={() => setIsIdaeModalOpen(true)}
               onNavigateToView={(v) => setCurrentView(v)}
+              isolatedProcessInfo={isolatedProcessInfo}
+              onSetIsolatedProcessInfo={setIsolatedProcessInfo}
             />
           )}
         </main>

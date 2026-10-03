@@ -163,3 +163,16 @@ export interface PresetCycle {
     bypassFactor?: number;
   }>;
 }
+
+export interface IsolatedProcessInfo {
+  moduleId: string;
+  moduleName: string;
+  moduleType: AHUModuleType | string;
+  isPassive: boolean;
+  entryPoint: StatePoint;
+  exitPoint: StatePoint;
+  secondaryEntryPoint?: StatePoint;
+  process?: ProcessConnection;
+  pressureDropPa?: number;
+  onClearIsolation?: () => void;
+}

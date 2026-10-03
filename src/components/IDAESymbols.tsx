@@ -332,9 +332,9 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
       return (
         <g className="idae-symbol-intake-damper-plan">
           {/* Intake grill flange on left */}
-          <line x1="6" y1="20" x2="6" y2="165" stroke={idaeGreen} strokeWidth="3" />
+          <line x1="6" y1="8" x2="6" y2="166" stroke={idaeGreen} strokeWidth="3" />
           {/* Top-down damper louvres axes */}
-          {[36, 72, 108, 144].map((py, idx) => (
+          {[27, 67, 107, 147].map((py) => (
             <g key={`damper-plan-${py}`} transform={`translate(24, ${py})`}>
               <circle cx="0" cy="0" r="4" fill={idaeGreen} />
               <line
@@ -349,7 +349,7 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
             </g>
           ))}
           {/* Flow vector arrows */}
-          <g transform={`translate(${modWidth / 2}, 95)`}>
+          <g transform={`translate(${modWidth / 2}, 87)`}>
             <line x1="-15" y1="0" x2="15" y2="0" stroke={idaeGreen} strokeWidth="2.5" />
             <polygon points="15,0 9,-4 9,4" fill={idaeGreen} />
           </g>
@@ -483,19 +483,20 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
         <g className="idae-symbol-prefilter-plan">
           <rect
             x="8"
-            y="20"
+            y="8"
             width={modWidth - 16}
-            height="160"
+            height="158"
             fill={isWhiteTheme ? '#FFF1F2' : '#2A0E18'}
             stroke={idaePink}
             strokeWidth="1.5"
           />
           {/* Wire backing mesh in plan */}
-          <line x1="12" y1="25" x2={modWidth - 12} y2="175" stroke={idaePink} strokeWidth="1" strokeDasharray="3,3" />
-          <line x1={modWidth - 12} y1="25" x2="12" y2="175" stroke={idaePink} strokeWidth="1" strokeDasharray="3,3" />
+          <line x1="12" y1="12" x2={modWidth - 12} y2="162" stroke={idaePink} strokeWidth="1" strokeDasharray="3,3" />
+          <line x1={modWidth - 12} y1="12" x2="12" y2="162" stroke={idaePink} strokeWidth="1" strokeDasharray="3,3" />
           <text
             x={modWidth / 2}
-            y="105"
+            y="87"
+            dominantBaseline="central"
             textAnchor="middle"
             fill={idaePink}
             fontSize="10"
@@ -633,14 +634,14 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
         <g className="idae-symbol-prefilter-flat-plan">
           <rect
             x="4"
-            y="20"
+            y="8"
             width={modWidth - 8}
-            height="160"
+            height="158"
             fill={isWhiteTheme ? '#FFF1F2' : '#2A0E18'}
             stroke={idaePink}
             strokeWidth="1.5"
           />
-          <line x1={modWidth / 2} y1="20" x2={modWidth / 2} y2="180" stroke={idaePink} strokeWidth="2" />
+          <line x1={modWidth / 2} y1="8" x2={modWidth / 2} y2="166" stroke={idaePink} strokeWidth="2" />
         </g>
       );
     }
@@ -693,15 +694,15 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
         <g className="idae-symbol-mixing-box-plan">
           <rect
             x="8"
-            y="20"
+            y="8"
             width={modWidth - 16}
-            height="160"
+            height="158"
             fill={isWhiteTheme ? '#FFFBEB' : '#1F1607'}
             stroke="#F59E0B"
             strokeWidth="1.5"
           />
-          <circle cx={modWidth / 2} cy="100" r="16" fill="#F59E0B" opacity="0.4" />
-          <text x={modWidth / 2} y="104" textAnchor="middle" fill="#D97706" fontSize="10" fontWeight="bold">
+          <circle cx={modWidth / 2} cy="87" r="16" fill="#F59E0B" opacity="0.4" />
+          <text x={modWidth / 2} y="87" dominantBaseline="central" textAnchor="middle" fill="#D97706" fontSize="10" fontWeight="bold">
             MEZCLA
           </text>
         </g>
@@ -804,6 +805,36 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
   // ----------------------- 5. RECUPERADOR DE CALOR DE PLACAS (PÁG. 19, 49, 81) -----------------------
   if (mod.type === 'heat_recovery') {
     const eff = mod.params.recoveryEfficiency ?? 0.75;
+
+    if (viewMode === 'plan') {
+      return (
+        <g className="idae-symbol-heat-recovery-plan">
+          <rect
+            x="8"
+            y="8"
+            width={modWidth - 16}
+            height="158"
+            fill={isWhiteTheme ? '#F0F9FF' : '#0C1B2E'}
+            stroke={idaeBlue}
+            strokeWidth="2"
+          />
+          <line x1="8" y1="8" x2={modWidth - 8} y2="166" stroke={idaeBlue} strokeWidth="2.5" />
+          <line x1={modWidth - 8} y1="8" x2="8" y2="166" stroke={idaeBlue} strokeWidth="2.5" />
+          <text
+            x={modWidth / 2}
+            y="87"
+            dominantBaseline="central"
+            textAnchor="middle"
+            fill={idaeBlue}
+            fontSize="10"
+            fontWeight="bold"
+            fontFamily="JetBrains Mono"
+          >
+            RECUPERADOR
+          </text>
+        </g>
+      );
+    }
 
     return (
       <g className="idae-symbol-heat-recovery">
@@ -958,23 +989,24 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
         <g className="idae-symbol-cooling-coil-plan">
           <rect
             x="10"
-            y="20"
+            y="8"
             width={modWidth - 20}
-            height="160"
+            height="158"
             fill={isWhiteTheme ? '#F0F9FF' : '#082F49'}
             stroke={idaeBlue}
             strokeWidth="2"
           />
           {/* Tubes & headers from top */}
-          {[30, 60, 90, 120, 150].map((ty) => (
+          {[27, 57, 87, 117, 147].map((ty) => (
             <circle key={`cool-tube-plan-${ty}`} cx={modWidth / 2} cy={ty} r="5" fill={idaeBlue} />
           ))}
           <text
             x={modWidth / 2}
-            y="105"
+            y="87"
+            dominantBaseline="central"
             textAnchor="middle"
             fill="#FFFFFF"
-            fontSize="12"
+            fontSize="11"
             fontWeight="bold"
           >
             BATERÍA (−)
@@ -1040,22 +1072,23 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
         <g className="idae-symbol-heating-coil-plan">
           <rect
             x="10"
-            y="20"
+            y="8"
             width={modWidth - 20}
-            height="160"
+            height="158"
             fill={isWhiteTheme ? '#FFF1F2' : '#450A0A'}
             stroke={idaeRed}
             strokeWidth="2"
           />
-          {[30, 60, 90, 120, 150].map((ty) => (
+          {[27, 57, 87, 117, 147].map((ty) => (
             <circle key={`heat-tube-plan-${ty}`} cx={modWidth / 2} cy={ty} r="5" fill={idaeRed} />
           ))}
           <text
             x={modWidth / 2}
-            y="105"
+            y="87"
+            dominantBaseline="central"
             textAnchor="middle"
             fill="#FFFFFF"
-            fontSize="12"
+            fontSize="11"
             fontWeight="bold"
           >
             BATERÍA (+)
@@ -1125,6 +1158,36 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
   // ----------------------- 8. BATERÍA RESISTENCIAS ELÉCTRICAS (FIG. 11 PÁG. 24) -----------------------
   if (mod.type === 'electric_heater') {
     const heatTdb = mod.params.heatingTdb ?? 20.0;
+
+    if (viewMode === 'plan') {
+      return (
+        <g className="idae-symbol-electric-heater-plan">
+          <rect
+            x="10"
+            y="8"
+            width={modWidth - 20}
+            height="158"
+            fill={isWhiteTheme ? '#FFF1F2' : '#450A0A'}
+            stroke={idaeRed}
+            strokeWidth="2"
+          />
+          {[27, 57, 87, 117, 147].map((ty) => (
+            <circle key={`elec-tube-plan-${ty}`} cx={modWidth / 2} cy={ty} r="5" fill={idaeRed} />
+          ))}
+          <text
+            x={modWidth / 2}
+            y="87"
+            dominantBaseline="central"
+            textAnchor="middle"
+            fill="#FFFFFF"
+            fontSize="11"
+            fontWeight="bold"
+          >
+            RESIST. (+)
+          </text>
+        </g>
+      );
+    }
 
     return (
       <g className="idae-symbol-electric-heater">
@@ -1217,20 +1280,20 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
           {/* Centrifugal fan from top (Pág. 17 & 18 en planta) */}
           <rect
             x="8"
-            y="20"
+            y="8"
             width={modWidth - 16}
-            height="160"
+            height="158"
             rx="4"
             fill={isWhiteTheme ? '#ECFDF5' : '#03251E'}
             stroke={idaeGreen}
             strokeWidth="2"
           />
-          <circle cx={modWidth / 2 - 10} cy="100" r="38" fill={isWhiteTheme ? '#FFFFFF' : '#064E3B'} stroke={idaeGreen} strokeWidth="2" />
+          <circle cx={modWidth / 2 - 10} cy="87" r="38" fill={isWhiteTheme ? '#FFFFFF' : '#064E3B'} stroke={idaeGreen} strokeWidth="2" />
           {/* External motor on side (Pág. 17) */}
-          <rect x={modWidth - 32} y="75" width="24" height="50" rx="3" fill="#1E293B" stroke="#475569" strokeWidth="1.5" />
-          <text x={modWidth - 20} y="103" textAnchor="middle" fill="#34D399" fontSize="8" fontWeight="bold">MOT</text>
+          <rect x={modWidth - 32} y="62" width="24" height="50" rx="3" fill="#1E293B" stroke="#475569" strokeWidth="1.5" />
+          <text x={modWidth - 20} y="87" dominantBaseline="central" textAnchor="middle" fill="#34D399" fontSize="8" fontWeight="bold">MOT</text>
           {/* Pulleys & Belt */}
-          <line x1={modWidth / 2 - 10} y1="100" x2={modWidth - 20} y2="100" stroke="#D97706" strokeWidth="3" strokeDasharray="3,2" />
+          <line x1={modWidth / 2 - 10} y1="87" x2={modWidth - 20} y2="87" stroke="#D97706" strokeWidth="3" strokeDasharray="3,2" />
         </g>
       );
     }
@@ -1319,17 +1382,17 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
         <g className="idae-symbol-fan-plan">
           <rect
             x="8"
-            y="20"
+            y="8"
             width={modWidth - 16}
-            height="160"
+            height="158"
             rx="4"
             fill={isWhiteTheme ? '#ECFDF5' : '#03251E'}
             stroke={idaeGreen}
             strokeWidth="2"
           />
-          <circle cx={modWidth / 2} cy="100" r="42" fill={isWhiteTheme ? '#FFFFFF' : '#064E3B'} stroke={idaeGreen} strokeWidth="2" />
-          <circle cx={modWidth / 2} cy="100" r="16" fill="#047857" stroke="#34D399" strokeWidth="2" />
-          <text x={modWidth / 2} y="104" textAnchor="middle" fill="#FFFFFF" fontSize="9" fontWeight="bold">DIRECTO</text>
+          <circle cx={modWidth / 2} cy="87" r="42" fill={isWhiteTheme ? '#FFFFFF' : '#064E3B'} stroke={idaeGreen} strokeWidth="2" />
+          <circle cx={modWidth / 2} cy="87" r="16" fill="#047857" stroke="#34D399" strokeWidth="2" />
+          <text x={modWidth / 2} y="87" dominantBaseline="central" textAnchor="middle" fill="#FFFFFF" fontSize="9" fontWeight="bold">DIRECTO</text>
         </g>
       );
     }
@@ -1407,14 +1470,14 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
           {/* Authentic Plan View from Page 17 & 18: 4 parallel bag pockets side-by-side */}
           <rect
             x="8"
-            y="20"
+            y="8"
             width={modWidth - 16}
-            height="160"
+            height="158"
             fill={isWhiteTheme ? '#FDF2F8' : '#270817'}
             stroke={idaePink}
             strokeWidth="1.8"
           />
-          {[35, 75, 115, 155].map((by) => (
+          {[27, 67, 107, 147].map((by) => (
             <g key={`bag-plan-${by}`}>
               <polygon
                 points={`14,${by - 12} ${modWidth - 14},${by - 5} ${modWidth - 14},${by + 5} 14,${by + 12}`}
@@ -1427,7 +1490,8 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
           ))}
           <text
             x={modWidth / 2}
-            y="105"
+            y="87"
+            dominantBaseline="central"
             textAnchor="middle"
             fill={idaePink}
             fontSize="10"
@@ -1550,17 +1614,17 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
         <g className="idae-symbol-plenum-plan">
           <rect
             x="8"
-            y="20"
+            y="8"
             width={modWidth - 16}
-            height="160"
+            height="158"
             fill={isWhiteTheme ? '#F8FAFC' : '#0F172A'}
             stroke="#94A3B8"
             strokeWidth="1.8"
           />
           {/* Access door on the side in plan view */}
-          <rect x={modWidth - 8} y="60" width="4" height="80" fill="#64748B" />
-          <line x1={modWidth - 8} y1="60" x2={modWidth + 12} y2="40" stroke="#0284C7" strokeWidth="2" />
-          <text x={modWidth / 2} y="105" textAnchor="middle" fill="#64748B" fontSize="10" fontWeight="bold">
+          <rect x={modWidth - 8} y="47" width="4" height="80" fill="#64748B" />
+          <line x1={modWidth - 8} y1="47" x2={modWidth + 12} y2="27" stroke="#0284C7" strokeWidth="2" />
+          <text x={modWidth / 2} y="87" dominantBaseline="central" textAnchor="middle" fill="#64748B" fontSize="10" fontWeight="bold">
             PLENUM
           </text>
         </g>
@@ -1631,6 +1695,29 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
 
   // ----------------------- 13. ENFRIAMIENTO ADIABÁTICO (PÁG. 49 & 81) -----------------------
   if (mod.type === 'adiabatic_cooling') {
+    if (viewMode === 'plan') {
+      return (
+        <g className="idae-symbol-adiabatic-plan">
+          <rect
+            x="8"
+            y="8"
+            width={modWidth - 16}
+            height="158"
+            rx="4"
+            fill={isWhiteTheme ? '#F0F9FF' : '#082F49'}
+            stroke={idaeBlue}
+            strokeWidth="2"
+          />
+          <line x1={modWidth / 2} y1="8" x2={modWidth / 2} y2="166" stroke={idaeBlue} strokeWidth="2.5" />
+          {[27, 57, 87, 117, 147].map((ny) => (
+            <circle key={`adiab-nozzle-${ny}`} cx={modWidth / 2} cy={ny} r="4" fill="#38BDF8" />
+          ))}
+          <text x={modWidth / 2} y="87" dominantBaseline="central" textAnchor="middle" fill="#0284C7" fontSize="10" fontWeight="bold">
+            ADIABÁTICO
+          </text>
+        </g>
+      );
+    }
     return (
       <g className="idae-symbol-adiabatic-cooling">
         <rect
@@ -1801,6 +1888,28 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
   if (mod.type === 'rotary_wheel') {
     const eff = mod.params.recoveryEfficiency ?? 0.78;
 
+    if (viewMode === 'plan') {
+      return (
+        <g className="idae-symbol-rotary-wheel-plan">
+          <rect
+            x="8"
+            y="8"
+            width={modWidth - 16}
+            height="158"
+            rx="4"
+            fill={isWhiteTheme ? '#F0FDF4' : '#042217'}
+            stroke={idaeGreen}
+            strokeWidth="2"
+          />
+          <line x1={modWidth / 2} y1="8" x2={modWidth / 2} y2="166" stroke={idaeGreen} strokeWidth="3" />
+          <circle cx={modWidth / 2} cy="87" r="16" fill="#047857" stroke="#34D399" strokeWidth="2" />
+          <text x={modWidth / 2} y="87" dominantBaseline="central" textAnchor="middle" fill="#FFFFFF" fontSize="9" fontWeight="bold">
+            RUEDA
+          </text>
+        </g>
+      );
+    }
+
     return (
       <g className="idae-symbol-rotary-wheel">
         <rect
@@ -1891,6 +2000,26 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
   if (mod.type === 'return_fan') {
     const pEst = mod.params.staticPressurePa ?? 380;
 
+    if (viewMode === 'plan') {
+      return (
+        <g className="idae-symbol-return-fan-plan">
+          <rect
+            x="8"
+            y="8"
+            width={modWidth - 16}
+            height="158"
+            rx="4"
+            fill={isWhiteTheme ? '#FEF3C7' : '#291804'}
+            stroke="#D97706"
+            strokeWidth="2"
+          />
+          <circle cx={modWidth / 2} cy="87" r="38" fill={isWhiteTheme ? '#FFFFFF' : '#451A03'} stroke="#D97706" strokeWidth="2" />
+          <circle cx={modWidth / 2} cy="87" r="14" fill="#B45309" stroke="#FBBF24" strokeWidth="1.8" />
+          <text x={modWidth / 2} y="87" dominantBaseline="central" textAnchor="middle" fill="#FFFFFF" fontSize="9" fontWeight="bold">RETORNO</text>
+        </g>
+      );
+    }
+
     return (
       <g className="idae-symbol-return-fan">
         <rect
@@ -1967,6 +2096,23 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
 
   // ----------------------- 17. COMPUERTA DE EXPULSIÓN (EHA) -----------------------
   if (mod.type === 'exhaust_damper') {
+    if (viewMode === 'plan') {
+      return (
+        <g className="idae-symbol-exhaust-damper-plan">
+          <line x1={modWidth - 6} y1="8" x2={modWidth - 6} y2="166" stroke="#92400E" strokeWidth="3" />
+          {[27, 67, 107, 147].map((py) => (
+            <g key={`exh-plan-${py}`} transform={`translate(${modWidth - 24}, ${py})`}>
+              <circle cx="0" cy="0" r="4" fill="#92400E" />
+              <line x1="-14" y1="0" x2="14" y2="0" stroke={primaryStroke} strokeWidth="2.5" transform="rotate(35)" />
+            </g>
+          ))}
+          <g transform={`translate(${modWidth / 2}, 87)`}>
+            <line x1="-15" y1="0" x2="15" y2="0" stroke="#92400E" strokeWidth="2.5" />
+            <polygon points="15,0 9,-4 9,4" fill="#92400E" />
+          </g>
+        </g>
+      );
+    }
     return (
       <g className="idae-symbol-exhaust-damper">
         <g transform="translate(18, 20)">
@@ -2044,6 +2190,47 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
   if (mod.type === 'silencer') {
     const att = mod.params.attenuationDb ?? 18;
 
+    if (viewMode === 'plan') {
+      return (
+        <g className="idae-symbol-silencer-plan">
+          <rect
+            x="8"
+            y="8"
+            width={modWidth - 16}
+            height="158"
+            rx="3"
+            fill={isWhiteTheme ? '#F8FAFC' : '#0F172A'}
+            stroke="#64748B"
+            strokeWidth="1.5"
+          />
+          {[27, 67, 107, 147].map((by) => (
+            <rect
+              key={`sil-baffle-${by}`}
+              x="14"
+              y={by - 10}
+              width={modWidth - 28}
+              height="20"
+              rx="4"
+              fill={isWhiteTheme ? '#CBD5E1' : '#334155'}
+              stroke="#64748B"
+              strokeWidth="1"
+            />
+          ))}
+          <text
+            x={modWidth / 2}
+            y="87"
+            dominantBaseline="central"
+            textAnchor="middle"
+            fill="#64748B"
+            fontSize="10"
+            fontWeight="bold"
+          >
+            SILENCIADOR (-{att} dB)
+          </text>
+        </g>
+      );
+    }
+
     return (
       <g className="idae-symbol-silencer">
         <rect
@@ -2112,6 +2299,37 @@ export const IDAESectionSymbol: React.FC<IDAESectionSymbolProps> = ({
 
   // ----------------------- 19. HUMIDIFICADOR DE VAPOR SECO -----------------------
   if (mod.type === 'humidifier') {
+    if (viewMode === 'plan') {
+      return (
+        <g className="idae-symbol-humidifier-plan">
+          <rect
+            x="8"
+            y="8"
+            width={modWidth - 16}
+            height="158"
+            rx="4"
+            fill={isWhiteTheme ? '#FAF5FF' : '#2E1065'}
+            stroke="#A855F7"
+            strokeWidth="1.8"
+          />
+          <line x1={modWidth / 2} y1="8" x2={modWidth / 2} y2="166" stroke="#A855F7" strokeWidth="2.5" />
+          {[27, 57, 87, 117, 147].map((ny) => (
+            <circle key={`lance-plan-${ny}`} cx={modWidth / 2} cy={ny} r="4" fill="#C084FC" />
+          ))}
+          <text
+            x={modWidth / 2}
+            y="87"
+            dominantBaseline="central"
+            textAnchor="middle"
+            fill="#FFFFFF"
+            fontSize="10"
+            fontWeight="bold"
+          >
+            HUMIDIFICADOR
+          </text>
+        </g>
+      );
+    }
     return (
       <g className="idae-symbol-humidifier">
         <g transform="translate(14, 18)">
