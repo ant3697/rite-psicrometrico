@@ -161,23 +161,30 @@ export const SidebarControls: React.FC<SidebarControlsProps> = ({
                 <div
                   key={pt.id}
                   onClick={() => onSelectPoint(pt.id)}
-                  className={`flex items-center justify-between p-2 rounded-[6px] cursor-pointer transition-all border ${
+                  className={`p-2 rounded-[8px] cursor-pointer transition-all border ${
                     isSelected
-                      ? 'bg-[#fbbf24]/15 border-[#fbbf24] text-white shadow-[0_0_10px_rgba(251,191,36,0.15)]'
-                      : 'bg-[#0a0a0c]/40 border-[rgba(255,255,255,0.08)] text-[#cbd5e1] hover:bg-[rgba(255,255,255,0.05)]'
+                      ? 'bg-[#fbbf24]/15 border-[#fbbf24] text-white shadow-[0_0_12px_rgba(251,191,36,0.2)] ring-1 ring-[#fbbf24]/40'
+                      : 'bg-[#0a0a0c]/50 border-[rgba(255,255,255,0.08)] text-[#cbd5e1] hover:bg-[rgba(255,255,255,0.06)] hover:border-[rgba(255,255,255,0.16)]'
                   }`}
                 >
-                  <div className="flex items-center gap-2.5 truncate">
-                    <span
-                      className="w-3 h-3 rounded-full shrink-0 shadow-sm"
-                      style={{ backgroundColor: pt.color }}
-                    />
-                    <span className="text-xs font-semibold truncate">{pt.name}</span>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 truncate">
+                      <span
+                        className="w-2.5 h-2.5 rounded-full shrink-0 shadow-sm"
+                        style={{ backgroundColor: pt.color }}
+                      />
+                      <span className="text-xs font-semibold truncate">{pt.name}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 text-[11px] font-mono font-bold tabular-nums text-cyan-300 shrink-0">
+                      <span>{pt.tdb.toFixed(1)}°C</span>
+                      <span className="text-slate-500 font-normal">|</span>
+                      <span className="text-emerald-400 font-medium">{pt.rh.toFixed(0)}%</span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2 text-[11px] font-mono tabular-nums text-[#94a3b8] shrink-0">
-                    <span>{pt.tdb.toFixed(1)}°C</span>
-                    <span>·</span>
-                    <span>{pt.rh.toFixed(0)}%</span>
+                  <div className="flex items-center justify-between text-[10px] font-mono text-[#94a3b8] mt-1 pl-4.5">
+                    <span>w: {(pt.w * 1000).toFixed(1)} g/kg</span>
+                    <span>h: {pt.h.toFixed(1)} kJ/kg</span>
+                    <span>Q: {pt.volumeFlow || 3000} m³/h</span>
                   </div>
                 </div>
               );

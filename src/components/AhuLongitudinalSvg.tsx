@@ -31,6 +31,7 @@ export interface AhuLongitudinalSvgProps {
   onRemoveModule?: (id: string) => void;
   onDragExistingModule?: (index: number) => void;
   onDragEndExistingModule?: () => void;
+  onOpenEducationalGuide?: (moduleId: string) => void;
   getIdaeModuleTitle: (mod: AHUModuleItem) => string;
   isSplit?: boolean;
   propertiesDetailMode?: 'full' | 'compact' | 'hover';
@@ -62,6 +63,7 @@ export const AhuLongitudinalSvg: React.FC<AhuLongitudinalSvgProps> = ({
   onRemoveModule,
   onDragExistingModule,
   onDragEndExistingModule,
+  onOpenEducationalGuide,
   getIdaeModuleTitle,
   isSplit = false,
   propertiesDetailMode = 'hover',
@@ -72,38 +74,28 @@ export const AhuLongitudinalSvg: React.FC<AhuLongitudinalSvgProps> = ({
   const effPanX = isSplit ? 0 : transform.panX;
   const effPanY = isSplit ? 0 : transform.panY;
 
-  // ViewBox height adapts tightly to content and detail mode with generous margins for spaced cotas
+  // ViewBox height adapts tightly to content and unified tags between auxiliary cota lines
   const viewBoxHeight =
     cutViewMode === 'dual'
-      ? 680
+      ? 650
       : propertiesDetailMode === 'full'
-      ? 510
-      : propertiesDetailMode === 'compact'
-      ? 450
-      : 410;
+      ? 365
+      : 335;
 
   const centerOffsetY = viewBoxHeight / 2;
 
   // Exact anchor positions for elements in single view
-  const chassisY = 50;
+  const chassisY = 46;
   const chassisHeight = 186;
 
-  // Bottom cotas position: generous spacing between assembly and first cota (Cota 1),
-  // and clean spacing between Cota 1 and total length (Cota 2)
-  const cotasY =
-    propertiesDetailMode === 'full'
-      ? 330
-      : propertiesDetailMode === 'compact'
-      ? 280
-      : 254;
-  const totalCotaSpacing = 44;
+  // Bottom cotas position: clean spacing below the unified section transition tag
+  const cotasY = propertiesDetailMode === 'full' ? 262 : 232;
+  const totalCotaSpacing = 36;
   const totalCotaY = cotasY + totalCotaSpacing;
 
-  // Strict clamping: Content can NEVER move outside the white background window
-  // When effZoom <= 1.05, lock pan to 0 so the AHU stays 100% inside the white sheet
-  // When effZoom > 1.05, allow panning up to the sheet boundaries
-  const maxSafePanX = Math.max(0, (dynamicSvgViewBoxWidth * (effZoom - 1.0)) / 2);
-  const maxSafePanY = Math.max(0, (viewBoxHeight * (effZoom - 1.0)) / 2);
+  // Clamping for smooth natural panning without locking at zoom 1.0
+  const maxSafePanX = Math.max(300, (dynamicSvgViewBoxWidth * Math.max(0, effZoom - 0.5)) / 2 + 150);
+  const maxSafePanY = Math.max(150, (viewBoxHeight * Math.max(0, effZoom - 0.5)) / 2 + 80);
   const safePanX = Math.max(-maxSafePanX, Math.min(maxSafePanX, effPanX));
   const safePanY = Math.max(-maxSafePanY, Math.min(maxSafePanY, effPanY));
 
@@ -502,13 +494,18 @@ export const AhuLongitudinalSvg: React.FC<AhuLongitudinalSvgProps> = ({
                 deltaText = `ΔP: -${pressureDropPa} Pa`;
               }
 
-              // X coordinate of the section change joint (where user drew red markers 1, 2, 3...)
+              // X coordinate of the section change joint
               const transitionJointX = modX + modWidth;
               const isTransitionHovered = hoveredTransition === index + 1;
 
-              // Staggered Two-Tier Y position in full mode to guarantee ZERO overlap between adjacent cards
-              const cardY = index % 2 === 0 ? 190 : 238;
-              const cardWidth = Math.max(90, Math.min(108, modWidth + 12));
+              // Unified Tag strictly situated between auxiliary cota lines of this module section
+              // Guaranteed ZERO overlap between adjacent sections
+              const tagMargin = 3;
+              const tagX = modX + tagMargin;
+              const tagWidth = Math.max(76, modWidth - tagMargin * 2);
+              const tagY = 192;
+              const isCompact = propertiesDetailMode === 'compact';
+              const tagHeight = isCompact ? 24 : 52;
 
               return (
                 <g key={mod.id}>
@@ -645,19 +642,44 @@ export const AhuLongitudinalSvg: React.FC<AhuLongitudinalSvgProps> = ({
                       </g>
                     )}
 
-                    {/* Canonical IDAE Header Title on top of module (01.png) */}
+                    {/* Canonical IDAE Header Title on top of module with 💡 Educational trigger */}
                     {getIdaeModuleTitle(mod) && (
-                      <text
-                        x={modWidth / 2}
-                        y="-12"
-                        textAnchor="middle"
-                        fill={isStepPointSelected ? '#0284C7' : isWhiteTheme ? '#000000' : '#E2E8F0'}
-                        fontSize="13.5"
-                        fontWeight="bold"
-                        fontFamily="Plus Jakarta Sans"
-                      >
-                        {getIdaeModuleTitle(mod)}
-                      </text>
+                      <g>
+                        <text
+                          x={modWidth / 2}
+                          y="-12"
+                          textAnchor="middle"
+                          fill={isStepPointSelected ? '#0284C7' : isWhiteTheme ? '#000000' : '#E2E8F0'}
+                          fontSize="13.5"
+                          fontWeight="bold"
+                          fontFamily="Plus Jakarta Sans"
+                        >
+                          {getIdaeModuleTitle(mod)}
+                        </text>
+
+                        {/* Educational Lightbulb Trigger 💡 */}
+                        <g
+                          transform={`translate(${modWidth / 2 + Math.min(54, getIdaeModuleTitle(mod).length * 4.4) + 4}, -22)`}
+                          className="cursor-pointer hover:scale-125 transition-transform"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onOpenEducationalGuide?.(mod.id);
+                          }}
+                        >
+                          <rect
+                            x="-2"
+                            y="0"
+                            width="18"
+                            height="15"
+                            rx="4"
+                            fill={isWhiteTheme ? '#FEF3C7' : '#0B132B'}
+                            stroke="#F59E0B"
+                            strokeWidth="0.8"
+                            opacity="0.9"
+                          />
+                          <text x="7" y="11" textAnchor="middle" fontSize="9.5">💡</text>
+                        </g>
+                      </g>
                     )}
                   </g>
 
@@ -718,163 +740,121 @@ export const AhuLongitudinalSvg: React.FC<AhuLongitudinalSvgProps> = ({
                     </g>
                   </g>
 
-                  {/* ---------------- 3. THERMODYNAMIC PROPERTIES CARD AT SECTION CHANGE ---------------- */}
-                  {/* ZERO OVERLAP: Rendered only when requested, staggered in 2 rows to eliminate collisions */}
-                  {propertiesDetailMode !== 'hover' && (
-                    <g
-                      transform={`translate(${transitionJointX}, ${propertiesDetailMode === 'compact' ? (index % 2 === 0 ? 190 : 214) : cardY})`}
-                      className="cursor-pointer group/card"
-                      onClick={() => onSelectModuleAndPoint(mod.id, step?.associatedPointId)}
-                      onMouseEnter={() => setHoveredTransition(index + 1)}
-                      onMouseLeave={() => setHoveredTransition(null)}
-                    >
-                      {/* Leader tick connecting joint to card */}
-                      <line
-                        x1="0"
-                        y1={propertiesDetailMode === 'compact' ? (index % 2 === 0 ? -8 : -32) : (index % 2 === 0 ? -8 : -54)}
-                        x2="0"
-                        y2="0"
-                        stroke="#EF4444"
-                        strokeWidth="1.2"
-                        strokeDasharray="2,2"
+                  {/* ---------------- 3. UNIFIED SECTION TRANSITION TAG (BETWEEN AUXILIARY COTA LINES) ---------------- */}
+                  {/* Positioned strictly between the auxiliary witness lines of this section with 3px clearance. ZERO OVERLAP guaranteed */}
+                  <g
+                    transform={`translate(${tagX}, ${tagY})`}
+                    className="cursor-pointer group/card"
+                    onClick={() => onSelectModuleAndPoint(mod.id, step?.associatedPointId)}
+                    onMouseEnter={() => setHoveredTransition(index + 1)}
+                    onMouseLeave={() => setHoveredTransition(null)}
+                  >
+                    {/* Unified Tag Background Frame */}
+                    <rect
+                      x="0"
+                      y="0"
+                      width={tagWidth}
+                      height={tagHeight}
+                      rx="5"
+                      fill={
+                        isStepPointSelected || isModActive
+                          ? isWhiteTheme
+                            ? '#EFF6FF'
+                            : '#0B172E'
+                          : isWhiteTheme
+                          ? '#FFFFFF'
+                          : '#070C18'
+                      }
+                      stroke={
+                        isStepPointSelected
+                          ? '#0284C7'
+                          : isModActive
+                          ? '#F59E0B'
+                          : isTransitionHovered
+                          ? '#38BDF8'
+                          : isWhiteTheme
+                          ? '#CBD5E1'
+                          : '#1E293B'
+                      }
+                      strokeWidth={isStepPointSelected || isModActive || isTransitionHovered ? '2' : '1.2'}
+                      filter={isStepPointSelected || isModActive || isTransitionHovered ? (isWhiteTheme ? undefined : 'url(#glowDrop)') : undefined}
+                    />
+
+                    {/* Row 1: Pin Number Badge + Tbs and HR */}
+                    <g transform="translate(4, 4)">
+                      <rect
+                        x="0"
+                        y="0"
+                        width="15"
+                        height="14"
+                        rx="3"
+                        fill={step?.associatedPointColor || '#EF4444'}
                       />
-
-                      {propertiesDetailMode === 'compact' ? (
-                        /* Compact Pill Mode (Width 84px, strictly non-overlapping and perfectly framed) */
-                        <g>
-                          <rect
-                            x="-42"
-                            y="0"
-                            width="84"
-                            height="22"
-                            rx="11"
-                            fill={
-                              isStepPointSelected || isTransitionHovered
-                                ? isWhiteTheme
-                                  ? '#E0F2FE'
-                                  : '#0E172E'
-                                : isWhiteTheme
-                                ? '#FFFFFF'
-                                : '#080D1A'
-                            }
-                            stroke={
-                              isStepPointSelected || isTransitionHovered
-                                ? '#EF4444'
-                                : isWhiteTheme
-                                ? '#CBD5E1'
-                                : '#1E293B'
-                            }
-                            strokeWidth={isStepPointSelected || isTransitionHovered ? '1.8' : '1'}
-                            filter={isStepPointSelected || isTransitionHovered ? (isWhiteTheme ? undefined : 'url(#glowDrop)') : undefined}
-                          />
-                          <circle cx="-30" cy="11" r="6" fill="#EF4444" />
-                          <text
-                            x="-30"
-                            y="11"
-                            dominantBaseline="central"
-                            textAnchor="middle"
-                            fill="#FFFFFF"
-                            fontSize="8"
-                            fontWeight="bold"
-                            fontFamily="JetBrains Mono"
-                          >
-                            {index + 1}
-                          </text>
-                          <text
-                            x="5"
-                            y="11"
-                            dominantBaseline="central"
-                            textAnchor="middle"
-                            fill={isWhiteTheme ? '#0F172A' : '#F8FAFC'}
-                            fontSize="8.5"
-                            fontWeight="bold"
-                            fontFamily="JetBrains Mono"
-                          >
-                            {tdb.toFixed(0)}°|{rh.toFixed(0)}%
-                          </text>
-                        </g>
-                      ) : (
-                        /* Full Detail Mode (Staggered 2-Tier rows so cards never touch) */
-                        <g>
-                          <rect
-                            x={-cardWidth / 2}
-                            y="0"
-                            width={cardWidth}
-                            height="44"
-                            rx="4"
-                            fill={
-                              isStepPointSelected || isTransitionHovered
-                                ? isWhiteTheme
-                                  ? '#E0F2FE'
-                                  : '#0E172E'
-                                : isWhiteTheme
-                                ? '#FFFFFF'
-                                : '#080D1A'
-                            }
-                            stroke={
-                              isStepPointSelected || isTransitionHovered
-                                ? '#EF4444'
-                                : isModActive
-                                ? '#F59E0B'
-                                : isWhiteTheme
-                                ? '#CBD5E1'
-                                : '#1E293B'
-                            }
-                            strokeWidth={isStepPointSelected || isTransitionHovered ? '2' : '1.2'}
-                            filter={isStepPointSelected || isTransitionHovered ? (isWhiteTheme ? undefined : 'url(#glowDrop)') : undefined}
-                          />
-
-                          {/* Row 1: Pin + T & HR */}
-                          <g transform={`translate(${-cardWidth / 2 + 3}, 3)`}>
-                            <rect x="0" y="0" width="13" height="12" rx="2" fill="#EF4444" />
-                            <text x="6.5" y="9" textAnchor="middle" fill="#FFFFFF" fontSize="8" fontWeight="bold" fontFamily="JetBrains Mono">
-                              {index + 1}
-                            </text>
-                            <text x="16" y="9.5" fill={isWhiteTheme ? '#0F172A' : '#F8FAFC'} fontSize="8.5" fontWeight="bold" fontFamily="JetBrains Mono">
-                              {tdb.toFixed(1)}° · {rh.toFixed(0)}%
-                            </text>
-                          </g>
-
-                          {/* Row 2: Specific Humidity (w) & Enthalpy (h) */}
-                          <text
-                            x={-cardWidth / 2 + 4}
-                            y="24"
-                            fill={isWhiteTheme ? '#475569' : '#94A3B8'}
-                            fontSize="7.5"
-                            fontFamily="JetBrains Mono"
-                          >
-                            w: {wGrams.toFixed(1)}g · h: {hKj.toFixed(1)}kJ
-                          </text>
-
-                          {/* Row 3: Modified properties (ΔT, ΔHR, ΔP) */}
-                          <g transform={`translate(${-cardWidth / 2 + 2}, 28)`}>
-                            <rect
-                              x="0"
-                              y="0"
-                              width={cardWidth - 4}
-                              height="13"
-                              rx="2"
-                              fill={isWhiteTheme ? '#F1F5F9' : '#030712'}
-                              stroke={badgeThemeColor}
-                              strokeWidth="0.8"
-                              strokeOpacity="0.6"
-                            />
-                            <text
-                              x={(cardWidth - 4) / 2}
-                              y="9"
-                              textAnchor="middle"
-                              fill={badgeThemeColor}
-                              fontSize="7.2"
-                              fontWeight="bold"
-                              fontFamily="JetBrains Mono"
-                            >
-                              {deltaText}
-                            </text>
-                          </g>
-                        </g>
-                      )}
+                      <text
+                        x="7.5"
+                        y="10.5"
+                        textAnchor="middle"
+                        fill="#FFFFFF"
+                        fontSize="8.5"
+                        fontWeight="bold"
+                        fontFamily="JetBrains Mono"
+                      >
+                        {index + 1}
+                      </text>
+                      <text
+                        x="19"
+                        y="10.5"
+                        fill={isWhiteTheme ? '#0F172A' : '#F8FAFC'}
+                        fontSize={tagWidth < 90 ? '8' : '8.5'}
+                        fontWeight="bold"
+                        fontFamily="JetBrains Mono"
+                      >
+                        {tdb.toFixed(1)}° <tspan fill={isWhiteTheme ? '#64748B' : '#94A3B8'} fontWeight="normal">·</tspan> <tspan fill={isWhiteTheme ? '#059669' : '#34D399'}>{rh.toFixed(0)}%</tspan>
+                      </text>
                     </g>
-                  )}
+
+                    {!isCompact && (
+                      <>
+                        {/* Row 2: Specific Humidity (w) & Enthalpy (h) */}
+                        <text
+                          x="5"
+                          y="28"
+                          fill={isWhiteTheme ? '#475569' : '#94A3B8'}
+                          fontSize={tagWidth < 95 ? '7.2' : '7.8'}
+                          fontFamily="JetBrains Mono"
+                        >
+                          w: <tspan fill={isWhiteTheme ? '#0284C7' : '#38BDF8'} fontWeight="bold">{wGrams.toFixed(1)}g</tspan> · h: <tspan fill={isWhiteTheme ? '#0F766E' : '#2DD4BF'} fontWeight="bold">{hKj.toFixed(1)}kJ</tspan>
+                        </text>
+
+                        {/* Row 3: Action / Differential Strip */}
+                        <g transform="translate(3, 33)">
+                          <rect
+                            x="0"
+                            y="0"
+                            width={tagWidth - 6}
+                            height="15"
+                            rx="3"
+                            fill={isWhiteTheme ? '#F8FAFC' : '#030712'}
+                            stroke={badgeThemeColor}
+                            strokeWidth="0.8"
+                            strokeOpacity="0.6"
+                          />
+                          <text
+                            x={(tagWidth - 6) / 2}
+                            y="10.5"
+                            dominantBaseline="central"
+                            textAnchor="middle"
+                            fill={badgeThemeColor}
+                            fontSize={tagWidth < 90 ? '6.8' : '7.4'}
+                            fontWeight="bold"
+                            fontFamily="JetBrains Mono"
+                          >
+                            {deltaText}
+                          </text>
+                        </g>
+                      </>
+                    )}
+                  </g>
                 </g>
               );
             });
@@ -895,12 +875,12 @@ export const AhuLongitudinalSvg: React.FC<AhuLongitudinalSvgProps> = ({
                     const dimMeters = (moduleDimensionsMeters[mod.type] || 0.4).toFixed(2).replace('.', ',');
                     currentX += w + MODULE_SPACING;
 
-                    // Relative witness line top: reaches up near the machine legs / casing
-                    const witnessTopY = propertiesDetailMode === 'full' ? -124 : propertiesDetailMode === 'compact' ? -72 : -44;
+                    // Relative witness line top: starts precisely at the casing bottom (Y = 186)
+                    const witnessTopY = propertiesDetailMode === 'full' ? -76 : -46;
 
                     return (
                       <g key={`dim-mod-${mod.id}-${idx}`}>
-                        {/* Witness Reference Lines (Extending from near the assembly to the dimension line) */}
+                        {/* Witness Reference Lines (Extending from casing bottom past unified tag to dimension line) */}
                         <line x1={xStart} y1={witnessTopY} x2={xStart} y2="8" stroke="#E11D48" strokeWidth="1.2" strokeOpacity="0.75" />
                         <line x1={xEnd} y1={witnessTopY} x2={xEnd} y2="8" stroke="#E11D48" strokeWidth="1.2" strokeOpacity="0.75" />
 
@@ -941,7 +921,7 @@ export const AhuLongitudinalSvg: React.FC<AhuLongitudinalSvgProps> = ({
                 <g transform={`translate(0, ${totalCotaSpacing})`}>
                   {/* Extension Witness Lines connecting all the way up */}
                   {(() => {
-                    const totalWitnessTopY = propertiesDetailMode === 'full' ? -170 : propertiesDetailMode === 'compact' ? -118 : -90;
+                    const totalWitnessTopY = -(totalCotaSpacing + (cotasY - 186));
                     return (
                       <>
                         <line x1="6" y1={totalWitnessTopY} x2="6" y2="8" stroke={isWhiteTheme ? '#0F172A' : '#E2E8F0'} strokeWidth="1.4" strokeOpacity="0.8" />
@@ -1245,205 +1225,6 @@ export const AhuLongitudinalSvg: React.FC<AhuLongitudinalSvgProps> = ({
           </g>
         </g>
 
-        {/* ---------------- 5. FRONTMOST FLOATING INSPECTION WINDOW (TOPMOST Z-ORDER) ---------------- */}
-        {/* Rendered at the absolute end of the SVG so NO symbols, lines, or casing ever cut through it! */}
-        {hoveredTransition !== null && activeTransitionMod && (
-          (() => {
-            const mod = activeTransitionMod;
-            const step = activeTransitionStep;
-            const entry = step ? step.entryPoint : outdoorPoint;
-            const exit = step ? step.exitPoint : outdoorPoint;
-
-            const tdb = exit.tdb;
-            const rh = exit.rh;
-            const wGrams = exit.w * 1000;
-            const hKj = exit.h;
-            const deltaTdb = exit.tdb - entry.tdb;
-            const deltaRh = exit.rh - entry.rh;
-            const deltaWGrams = (exit.w - entry.w) * 1000;
-            const pressureDropPa = mod.pressureDropPa;
-            const powerKW = step?.metrics?.qTotal
-              ? Math.abs(step.metrics.qTotal)
-              : step?.metrics?.qSensible
-              ? Math.abs(step.metrics.qSensible)
-              : undefined;
-            const condensateLh = step?.metrics?.moistureExchange
-              ? Math.abs(step.metrics.moistureExchange)
-              : undefined;
-
-            // Calculate precise pin position in the train
-            let runningX = 10;
-            for (let i = 0; i < hoveredTransition; i++) {
-              const m = enabledModules[i];
-              if (i < hoveredTransition - 1) {
-                runningX += (moduleWidths[m.type] || 100) + MODULE_SPACING;
-              } else {
-                runningX += (moduleWidths[m.type] || 100) + MODULE_SPACING / 2;
-              }
-            }
-
-            const pinSvgX = ahuStartX + runningX;
-            const pinSvgY = (cutViewMode === 'dual' ? 48 : chassisY) - 6;
-
-            const winW = 260;
-            const winH = 142;
-            const winX = Math.max(16, Math.min(dynamicSvgViewBoxWidth - winW - 16, pinSvgX - winW / 2));
-            const winY = (cutViewMode === 'dual' ? 48 : chassisY) + 16;
-
-            return (
-              <g className="pointer-events-none transition-all duration-75">
-                {/* Luminous Glow Backdrop */}
-                <rect
-                  x={winX - 2}
-                  y={winY - 2}
-                  width={winW + 4}
-                  height={winH + 4}
-                  rx="10"
-                  fill="#0284C7"
-                  fillOpacity="0.25"
-                  filter="url(#glowDrop)"
-                />
-
-                {/* 100% Solid Opaque High-Tech Container Card */}
-                <rect
-                  x={winX}
-                  y={winY}
-                  width={winW}
-                  height={winH}
-                  rx="8"
-                  fill="#060B18"
-                  stroke="#38BDF8"
-                  strokeWidth="2"
-                  filter="url(#hudCardShadow)"
-                />
-
-                {/* Top header plaque */}
-                <rect
-                  x={winX + 1}
-                  y={winY + 1}
-                  width={winW - 2}
-                  height="30"
-                  rx="7"
-                  fill="#0F172A"
-                />
-                <line x1={winX} y1={winY + 31} x2={winX + winW} y2={winY + 31} stroke="#1E293B" strokeWidth="1.2" />
-
-                {/* Pin Circle in header */}
-                <circle cx={winX + 16} cy={winY + 16} r="8.5" fill="#EF4444" stroke="#FFFFFF" strokeWidth="1.4" />
-                <text
-                  x={winX + 16}
-                  y={winY + 19.5}
-                  textAnchor="middle"
-                  fill="#FFFFFF"
-                  fontSize="9.5"
-                  fontWeight="bold"
-                  fontFamily="JetBrains Mono"
-                >
-                  {hoveredTransition}
-                </text>
-
-                {/* Header Titles */}
-                <text
-                  x={winX + 31}
-                  y={winY + 15}
-                  fill="#F8FAFC"
-                  fontSize="11"
-                  fontWeight="bold"
-                  fontFamily="Plus Jakarta Sans"
-                >
-                  Salida: {getIdaeModuleTitle(mod)}
-                </text>
-                <text
-                  x={winX + 31}
-                  y={winY + 25}
-                  fill="#94A3B8"
-                  fontSize="8.2"
-                  fontFamily="JetBrains Mono"
-                >
-                  {exit.name ? `Estado: ${exit.name}` : `Punto Intermedio #${hoveredTransition}`}
-                </text>
-
-                {/* Thermodynamic Metrics Grid */}
-                <g transform={`translate(${winX + 12}, ${winY + 48})`} fontFamily="JetBrains Mono" fontSize="9">
-                  <text x="0" y="0" fill="#94A3B8">
-                    Tbs: <tspan fill="#38BDF8" fontWeight="bold">{tdb.toFixed(2)} °C</tspan>
-                  </text>
-                  <text x="114" y="0" fill="#94A3B8">
-                    HR: <tspan fill="#38BDF8" fontWeight="bold">{rh.toFixed(1)} %</tspan>
-                  </text>
-
-                  <text x="0" y="16" fill="#94A3B8">
-                    w: <tspan fill="#A3E635" fontWeight="bold">{wGrams.toFixed(2)} g/kg</tspan>
-                  </text>
-                  <text x="114" y="16" fill="#94A3B8">
-                    h: <tspan fill="#A3E635" fontWeight="bold">{hKj.toFixed(1)} kJ/kg</tspan>
-                  </text>
-
-                  <text x="0" y="32" fill="#94A3B8">
-                    ΔP: <tspan fill="#F59E0B" fontWeight="bold">-{pressureDropPa} Pa</tspan>
-                  </text>
-                  <text x="114" y="32" fill="#94A3B8">
-                    {powerKW !== undefined ? (
-                      <>Q: <tspan fill="#F59E0B" fontWeight="bold">{powerKW.toFixed(1)} kW</tspan></>
-                    ) : condensateLh ? (
-                      <>💧 <tspan fill="#06B6D4" fontWeight="bold">{condensateLh.toFixed(1)} L/h</tspan></>
-                    ) : (
-                      <tspan fill="#64748B">w = cte</tspan>
-                    )}
-                  </text>
-                </g>
-
-                {/* Transformation strip */}
-                <rect
-                  x={winX + 8}
-                  y={winY + 94}
-                  width={winW - 16}
-                  height="19"
-                  rx="4"
-                  fill="#030712"
-                  stroke="#1E293B"
-                  strokeWidth="0.8"
-                />
-                <text
-                  x={winX + winW / 2}
-                  y={winY + 104}
-                  dominantBaseline="central"
-                  textAnchor="middle"
-                  fill="#38BDF8"
-                  fontSize="8.2"
-                  fontWeight="bold"
-                  fontFamily="JetBrains Mono"
-                >
-                  {deltaTdb !== 0 || deltaRh !== 0 || deltaWGrams !== 0
-                    ? `ΔT: ${deltaTdb > 0 ? '+' : ''}${deltaTdb.toFixed(1)}° · ΔHR: ${deltaRh > 0 ? '+' : ''}${deltaRh.toFixed(0)}% · Δw: ${deltaWGrams > 0 ? '+' : ''}${deltaWGrams.toFixed(1)}g`
-                    : `Proceso Isentálpico/Filtración · ΔP: -${pressureDropPa} Pa`}
-                </text>
-
-                {/* Click Prompt */}
-                <text
-                  x={winX + winW / 2}
-                  y={winY + 126}
-                  dominantBaseline="central"
-                  textAnchor="middle"
-                  fill="#EF4444"
-                  fontSize="7.8"
-                  fontWeight="bold"
-                  fontFamily="JetBrains Mono"
-                >
-                  ● Clic en el pin para fijar en el Psicrométrico
-                </text>
-
-                {/* Leader Arrow Pointer to the red pin */}
-                <polygon
-                  points={`${pinSvgX},${pinSvgY + 7} ${pinSvgX - 7},${winY} ${pinSvgX + 7},${winY}`}
-                  fill="#0F172A"
-                  stroke="#38BDF8"
-                  strokeWidth="1.6"
-                />
-              </g>
-            );
-          })()
-        )}
         </g>
       </g>
     </svg>

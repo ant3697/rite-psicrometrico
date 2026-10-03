@@ -50,7 +50,7 @@ export function getSaturationVaporPressure(tCelsius: number): number {
     const c3 = -9.677843e-3;
     const c4 = 6.2215701e-7;
     const c5 = 2.0747825e-9;
-    const c6 = -9.484024e-1;
+    const c6 = -9.484024e-13;
     const c7 = 4.1635019;
     lnPws =
       c1 / T +
@@ -282,9 +282,9 @@ export function solveStatePoint(
     }
     case 'tdb_w': {
       tdb = inputs.tdb ?? 24;
-      // w can be provided in g/kg or kg/kg
+      // w in kg/kg (or g/kg if > 2.0)
       const rawW = inputs.w ?? 0.008;
-      w = rawW > 0.1 ? rawW / 1000 : rawW;
+      w = rawW > 2.0 ? rawW / 1000 : rawW;
       const wMax = getSaturationHumidityRatio(tdb, pAtm);
       w = Math.min(wMax, Math.max(0, w));
       break;
@@ -299,7 +299,7 @@ export function solveStatePoint(
     }
     case 'h_w': {
       const rawW = inputs.w ?? 0.008;
-      w = rawW > 0.1 ? rawW / 1000 : rawW;
+      w = rawW > 2.0 ? rawW / 1000 : rawW;
       const h = inputs.h ?? 50;
       // h = C_PA * T + W * (H_FG + C_PW * T) = T * (C_PA + W * C_PW) + W * H_FG
       tdb = (h - w * H_FG) / (C_PA + w * C_PW);

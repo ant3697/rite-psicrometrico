@@ -22,6 +22,7 @@ import { BuildingSystemIDAESchematic } from './BuildingSystemIDAESchematic';
 import { IDAESymbolGuideModal } from './IDAESymbolGuideModal';
 import { AhuExampleGuideModal } from './AhuExampleGuideModal';
 import { AhuLongitudinalSvg } from './AhuLongitudinalSvg';
+import { AhuEducationalPanel } from './AhuEducationalPanel';
 import {
   AirVent,
   Sliders,
@@ -38,6 +39,7 @@ import {
   Building,
   Split,
   BookOpen,
+  GraduationCap,
   ChevronRight,
   ChevronLeft,
   Activity,
@@ -1106,29 +1108,34 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
   // Longitudinal section view mode: 'elevation' (Alzado), 'plan' (Planta), 'dual' (Alzado + Planta - Págs 17/18)
   const [cutViewMode, setCutViewMode] = useState<'elevation' | 'plan' | 'dual'>('elevation');
 
-  // Properties detail mode in section joints: 'full' (all properties %HR, T, w, h, ΔT, ΔHR, Δw, ΔP, Q), 'compact' (T, HR), or 'hover' (floating HUD on hover)
-  const [propertiesDetailMode, setPropertiesDetailMode] = useState<'full' | 'compact' | 'hover'>('hover');
+  // Properties detail mode in section joints: 'full' (all properties %HR, T, w, h, ΔP, action) or 'compact' (T, HR)
+  const [propertiesDetailMode, setPropertiesDetailMode] = useState<'full' | 'compact'>('full');
 
-  // Dynamic SVG ViewBox height (tight fit for assembly and spaced cotas)
+  // Educational Knowledge Panel RITE-IDAE State
+  const [isEducationalOpen, setIsEducationalOpen] = useState<boolean>(false);
+  const [selectedEducationalModuleId, setSelectedEducationalModuleId] = useState<string | null>(null);
+
+  const handleOpenEducationalGuide = useCallback((moduleId: string) => {
+    setSelectedEducationalModuleId(moduleId);
+    setIsEducationalOpen(true);
+  }, []);
+
+  // Dynamic SVG ViewBox height (tight fit for assembly, unified tag and spaced cotas)
   const dynamicSvgViewBoxHeight = useMemo(() => {
     return cutViewMode === 'dual'
       ? 650
       : propertiesDetailMode === 'full'
-      ? 480
-      : propertiesDetailMode === 'compact'
-      ? 430
-      : 395;
+      ? 365
+      : 335;
   }, [cutViewMode, propertiesDetailMode]);
 
-  // Boundaries for pan: strict clamping so content NEVER moves outside the white background window
+  // Boundaries for pan: smooth clamping without locking at zoom 1.0
   const getPanBounds = useCallback((zoom: number) => {
     const totalWidth = dynamicSvgViewBoxWidth;
     const totalHeight = dynamicSvgViewBoxHeight;
 
-    // When zoom <= 1.05, content fits completely inside the white window and is locked
-    // When zoom > 1.05, panning is permitted only up to the sheet boundaries
-    const maxPanX = Math.max(0, (totalWidth * (zoom - 1.0)) / 2);
-    const maxPanY = Math.max(0, (totalHeight * (zoom - 1.0)) / 2);
+    const maxPanX = Math.max(300, (totalWidth * Math.max(0, zoom - 0.5)) / 2 + 150);
+    const maxPanY = Math.max(150, (totalHeight * Math.max(0, zoom - 0.5)) / 2 + 80);
 
     return { maxPanX, maxPanY };
   }, [dynamicSvgViewBoxWidth, dynamicSvgViewBoxHeight]);
@@ -1201,30 +1208,14 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
     });
   };
 
-  // Zoom All fits the entire content tightly into the window dimensions
+  // Zoom All fits the entire content naturally to 100% of the SVG ViewBox
   const handleZoomAll = useCallback(() => {
-    if (!ahuContainerRef.current) {
-      setTransform({ zoom: 1.0, panX: 0, panY: 0 });
-      return;
-    }
-    const container = ahuContainerRef.current;
-    const containerWidth = container.clientWidth;
-    const containerHeight = container.clientHeight;
-
-    const totalWidth = dynamicSvgViewBoxWidth;
-    const totalHeight = dynamicSvgViewBoxHeight;
-
-    const scaleX = (containerWidth - 32) / totalWidth;
-    const scaleY = (containerHeight - 32) / totalHeight;
-    const fitScale = Math.min(scaleX, scaleY);
-    const optimalZoom = Number(Math.min(2.5, Math.max(0.4, fitScale)).toFixed(2));
-
     setTransform({
-      zoom: optimalZoom,
+      zoom: 1.0,
       panX: 0,
       panY: 0,
     });
-  }, [dynamicSvgViewBoxWidth, dynamicSvgViewBoxHeight]);
+  }, []);
 
   const handleCenterUnit = () => {
     setTransform((prev) => ({
@@ -1943,7 +1934,7 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
       )}
 
       {/* ---------------- 3. MAIN SVG CANVAS WITH VISUAL DROP TARGETS & REORDERING ---------------- */}
-      <div className="bg-slate-900/90 rounded-2xl border border-slate-800 p-4 shadow-2xl relative overflow-hidden flex flex-col items-center">
+      <div className="sticky top-0 z-30 bg-slate-900/95 backdrop-blur-xl rounded-2xl border border-slate-800 p-3 shadow-2xl relative flex flex-col items-center shrink-0">
         {/* Top Floating Viewport Control HUD */}
         {schematicMode !== 'split_sync' && (
           <div className="w-full flex items-center justify-between mb-3 px-1 z-20">
@@ -2005,39 +1996,43 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
               <div className="flex items-center gap-0.5">
                 <button
                   onClick={() => setPropertiesDetailMode('full')}
-                  className={`px-2 py-1 rounded-lg text-xs font-mono font-semibold transition-colors ${
+                  className={`px-2.5 py-1 rounded-lg text-xs font-mono font-semibold transition-colors ${
                     propertiesDetailMode === 'full'
                       ? 'bg-cyan-950/90 text-cyan-300 border border-cyan-500/50 shadow-sm'
                       : 'text-slate-400 hover:text-white hover:bg-slate-800'
                   }`}
-                  title="Ficha técnica detallada con todas las modificaciones en cada cambio de sección (%HR, T, w, h, ΔT, ΔHR, ΔP, Q)"
+                  title="Ficha técnica completa y unificada entre líneas auxiliares de cotas (%HR, T, w, h, ΔP, acción)"
                 >
                   Detalle
                 </button>
                 <button
                   onClick={() => setPropertiesDetailMode('compact')}
-                  className={`px-2 py-1 rounded-lg text-xs font-mono font-semibold transition-colors ${
+                  className={`px-2.5 py-1 rounded-lg text-xs font-mono font-semibold transition-colors ${
                     propertiesDetailMode === 'compact'
                       ? 'bg-cyan-950/90 text-cyan-300 border border-cyan-500/50 shadow-sm'
                       : 'text-slate-400 hover:text-white hover:bg-slate-800'
                   }`}
-                  title="Píldoras compactas con T y %HR en cada junta intermedia"
+                  title="Píldoras compactas con T y %HR entre líneas auxiliares de cotas"
                 >
                   Píldoras
                 </button>
-                <button
-                  onClick={() => setPropertiesDetailMode('hover')}
-                  className={`px-2 py-1 rounded-lg text-xs font-mono font-semibold transition-colors ${
-                    propertiesDetailMode === 'hover'
-                      ? 'bg-cyan-950/90 text-cyan-300 border border-cyan-500/50 shadow-sm'
-                      : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                  }`}
-                  title="Pines numerados discretos y HUD flotante al pasar el cursor"
-                >
-                  Flotante
-                </button>
               </div>
             </div>
+
+            {/* Educational Guide RITE Button */}
+            <button
+              onClick={() => setIsEducationalOpen((prev) => !prev)}
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-xl border shadow-lg text-xs font-mono font-semibold transition-all cursor-pointer ${
+                isEducationalOpen
+                  ? 'bg-amber-400 text-black border-amber-300 shadow-amber-400/20 font-bold scale-[1.02]'
+                  : 'bg-slate-950/90 text-slate-300 hover:text-white hover:bg-slate-800 border-slate-700/80'
+              }`}
+              title="Guía Educativa RITE-IDAE: ¿Qué función tiene cada elemento de la UTA?"
+            >
+              <GraduationCap className={`w-3.5 h-3.5 ${isEducationalOpen ? 'text-black' : 'text-amber-400'}`} />
+              <span className="hidden sm:inline">Guía Educativa RITE</span>
+              <span className="sm:hidden">Guía</span>
+            </button>
 
             {/* Navigation HUD */}
             <div className="flex items-center gap-1 bg-slate-950/90 backdrop-blur-md px-2 py-1.5 rounded-xl border border-slate-700/80 shadow-lg">
@@ -2112,12 +2107,10 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
               isWhiteTheme ? 'bg-slate-100/90 border-slate-300' : 'bg-slate-950/70 border-slate-800/80'
             } border transition-all flex items-center justify-center select-none ${
               cutViewMode === 'dual'
-                ? 'min-h-[620px] h-[670px]'
-                : propertiesDetailMode === 'full'
                 ? 'min-h-[480px] h-[520px]'
-                : propertiesDetailMode === 'compact'
-                ? 'min-h-[420px] h-[460px]'
-                : 'min-h-[390px] h-[420px]'
+                : propertiesDetailMode === 'full'
+                ? 'min-h-[350px] h-[380px] lg:h-[400px]'
+                : 'min-h-[300px] h-[330px] lg:h-[360px]'
             } ${
               isOverAhu ? 'border-cyan-400 ring-2 ring-cyan-500/40 shadow-2xl shadow-cyan-500/20' : ''
             } ${isDraggingCanvas ? 'cursor-grabbing' : 'cursor-grab'}`}
@@ -2201,13 +2194,30 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
               }}
               getIdaeModuleTitle={getIdaeModuleTitle}
               propertiesDetailMode={propertiesDetailMode}
+              onOpenEducationalGuide={handleOpenEducationalGuide}
             />
 
             {/* Bottom Floating Hint Overlay */}
             <div className="absolute bottom-3 left-4 z-10 hidden sm:flex items-center gap-2 text-[11px] text-slate-400 font-mono bg-slate-950/80 backdrop-blur-sm px-3 py-1.5 rounded-lg border border-slate-800/80 pointer-events-none shadow-md">
               <Move className="w-3.5 h-3.5 text-cyan-400" />
-              <span>Arrastra componentes de la paleta superior para soltarlos en la UTA · Clic en cualquier módulo para ajustar sus parámetros</span>
+              <span>Arrastra componentes de la paleta superior para soltarlos en la UTA · Clic en cualquier módulo o 💡 para ver su función técnica</span>
             </div>
+          </div>
+        )}
+
+        {/* Educational Knowledge Panel RITE-IDAE */}
+        {schematicMode === 'ahu_section' && isEducationalOpen && (
+          <div className="w-full mt-2.5 transition-all animate-in fade-in duration-200">
+            <AhuEducationalPanel
+              modules={modules}
+              selectedModuleId={selectedEducationalModuleId || editingModuleId}
+              onSelectModule={(id) => {
+                setSelectedEducationalModuleId(id);
+                setEditingModuleId(id);
+              }}
+              onClose={() => setIsEducationalOpen(false)}
+              isWhiteTheme={isWhiteTheme}
+            />
           </div>
         )}
 
@@ -2834,48 +2844,6 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
           </div>
         </div>
       )}
-
-      {/* ---------------- 5. SYNCHRONIZED STATE POINTS BAR ---------------- */}
-      <div className="bg-slate-900/80 p-3.5 rounded-xl border border-slate-800 space-y-2">
-        <div className="flex items-center justify-between text-xs">
-          <span className="font-semibold text-slate-300 uppercase tracking-wider font-tech flex items-center gap-1.5">
-            <Layers className="w-4 h-4 text-cyan-400" />
-            <span>Puntos Psicrométricos Mapeados en el Circuito Físico</span>
-          </span>
-          <span className="text-[11px] text-slate-500 font-mono">
-            Haz clic en cualquier punto para seleccionarlo e inspeccionar sus propiedades
-          </span>
-        </div>
-
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 pt-1">
-          {points.map((pt) => {
-            const isSelected = pt.id === selectedPointId;
-            return (
-              <div
-                key={pt.id}
-                onClick={() => onSelectPoint(pt.id)}
-                className={`p-2.5 rounded-lg border cursor-pointer transition-all ${
-                  isSelected
-                    ? 'bg-slate-800 border-cyan-400 shadow-md shadow-cyan-500/20'
-                    : 'bg-slate-950 border-slate-800/80 hover:border-slate-700'
-                }`}
-              >
-                <div className="flex items-center gap-1.5 truncate">
-                  <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: pt.color }} />
-                  <span className="text-xs font-semibold text-white truncate">{pt.name}</span>
-                </div>
-                <div className="mt-1 flex items-baseline justify-between font-mono text-[11px] tabular-nums">
-                  <span className="text-cyan-300 font-bold">{pt.tdb.toFixed(1)}°C</span>
-                  <span className="text-emerald-400 font-medium">{pt.rh.toFixed(0)}%</span>
-                </div>
-                <div className="text-[10px] text-slate-400 font-mono truncate mt-0.5">
-                  {(pt.w * 1000).toFixed(1)} g/kg | {pt.volumeFlow} m³/h
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
 
       {/* IDAE & UNE-EN 12792 Symbol Guide Modal */}
       <IDAESymbolGuideModal
