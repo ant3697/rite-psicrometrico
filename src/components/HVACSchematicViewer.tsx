@@ -12,6 +12,7 @@ import {
 } from '../types/psychrometrics';
 import {
   solveStatePoint,
+  getRelativeHumidity,
   P_ATM_STANDARD,
   C_PA,
   H_FG,
@@ -24,6 +25,7 @@ import { IDAESymbolGuideModal } from './IDAESymbolGuideModal';
 import { AhuExampleGuideModal } from './AhuExampleGuideModal';
 import { AhuLongitudinalSvg } from './AhuLongitudinalSvg';
 import { AhuEducationalPanel } from './AhuEducationalPanel';
+import { ModuleConfigDrawer } from './ModuleConfigDrawer';
 import {
   AirVent,
   Sliders,
@@ -77,7 +79,7 @@ interface HVACSchematicViewerProps {
   points: StatePoint[];
   processes: ProcessConnection[];
   selectedPointId: string | null;
-  onSelectPoint: (id: string) => void;
+  onSelectPoint: (id: string | null) => void;
   onUpdatePointCoordinates?: (id: string, tdb: number, w: number) => void;
   onAddPointAtCoordinates?: (tdb: number, w: number) => void;
   onUpdatePointsAndProcesses?: (points: StatePoint[], processes: ProcessConnection[]) => void;
@@ -1443,40 +1445,71 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
   const condensateLitersPerHour = ahuStepResults.condensateLitersPerHour;
   const totalPressureDropPa = ahuStepResults.totalPressureDrop;
 
-  // Isolated module state for psychrometric chart single transformation inspection
+  // Isolated module and process state for psychrometric chart single transformation inspection
   const [isolatedModuleId, setIsolatedModuleId] = useState<string | null>(null);
+  const [isolatedProcessId, setIsolatedProcessId] = useState<string | null>(null);
 
   // Compute isolation payload for PsychrometricChart
-  const isolatedProcessInfo = useMemo(() => {
-    if (!isolatedModuleId) return null;
-    const step = ahuStepResults.steps.find((s) => s.module.id === isolatedModuleId);
-    if (!step) return null;
+  const isolatedProcessInfo = useMemo<IsolatedProcessInfo | null>(() => {
+    if (isolatedModuleId) {
+      const step = ahuStepResults.steps.find((s) => s.module.id === isolatedModuleId);
+      if (!step) return null;
 
-    const matchedProc = processes.find(
-      (p) =>
-        (p.fromPointId === step.entryPoint.id && p.toPointId === step.exitPoint.id) ||
-        p.id.includes(step.module.id)
-    );
+      const matchedProc = processes.find(
+        (p) =>
+          (p.fromPointId === step.entryPoint.id && p.toPointId === step.exitPoint.id) ||
+          p.id.includes(step.module.id)
+      );
 
-    return {
-      moduleId: step.module.id,
-      moduleName: step.module.name,
-      moduleType: step.module.type,
-      isPassive: !step.isTransformation,
-      entryPoint: step.entryPoint,
-      exitPoint: step.exitPoint,
-      secondaryEntryPoint: step.module.type === 'mixing_box' ? returnPoint : undefined,
-      process: matchedProc,
-      pressureDropPa: step.module.pressureDropPa,
-      onClearIsolation: () => setIsolatedModuleId(null),
-    };
-  }, [isolatedModuleId, ahuStepResults.steps, processes, returnPoint]);
+      return {
+        moduleId: step.module.id,
+        moduleName: step.module.name,
+        moduleType: step.module.type,
+        isPassive: !step.isTransformation,
+        entryPoint: step.entryPoint,
+        exitPoint: step.exitPoint,
+        secondaryEntryPoint: step.module.type === 'mixing_box' ? returnPoint : undefined,
+        process: matchedProc,
+        pressureDropPa: step.module.pressureDropPa,
+        onClearIsolation: () => {
+          setIsolatedModuleId(null);
+          setIsolatedProcessId(null);
+        },
+      };
+    }
+
+    if (isolatedProcessId) {
+      const proc = processes.find((p) => p.id === isolatedProcessId);
+      if (!proc) return null;
+      const ptFrom = points.find((p) => p.id === proc.fromPointId);
+      const ptTo = points.find((p) => p.id === proc.toPointId);
+      if (!ptFrom || !ptTo) return null;
+
+      return {
+        processId: proc.id,
+        moduleName: proc.name,
+        moduleType: proc.type,
+        isPassive: false,
+        entryPoint: ptFrom,
+        exitPoint: ptTo,
+        process: proc,
+        onClearIsolation: () => {
+          setIsolatedModuleId(null);
+          setIsolatedProcessId(null);
+        },
+      };
+    }
+
+    return null;
+  }, [isolatedModuleId, isolatedProcessId, ahuStepResults.steps, processes, points, returnPoint]);
 
   const handleToggleIsolateModule = (modId: string) => {
     if (isolatedModuleId === modId) {
       setIsolatedModuleId(null);
+      setIsolatedProcessId(null);
     } else {
       setIsolatedModuleId(modId);
+      setIsolatedProcessId(null);
       if (schematicMode !== 'split_sync') {
         setSchematicMode('split_sync');
       }
@@ -1489,6 +1522,92 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
       onSetIsolatedProcessInfo(isolatedProcessInfo);
     }
   }, [isolatedProcessInfo, onSetIsolatedProcessInfo]);
+
+  // Synchronized point coordinate updates from the psychrometric chart back to AHU modules
+  const handleChartPointCoordinateUpdate = useCallback(
+    (id: string, tdb: number, w: number) => {
+      if (onUpdatePointCoordinates) {
+        onUpdatePointCoordinates(id, tdb, w);
+      }
+
+      // If dragging a point that matches an AHU transformation step, update the module parameter
+      const matchedStep = ahuStepResults.steps.find(
+        (s) => s.associatedPointId === id || s.exitPoint.id === id
+      );
+
+      if (matchedStep) {
+        const modId = matchedStep.module.id;
+        const mod = modules.find((m) => m.id === modId);
+        if (mod) {
+          if (mod.type === 'cooling_coil') {
+            handleUpdateModuleParams(modId, { exitTdb: Number(tdb.toFixed(1)) });
+          } else if (mod.type === 'heating_coil' || mod.type === 'electric_heater') {
+            handleUpdateModuleParams(modId, { heatingTdb: Number(tdb.toFixed(1)) });
+          } else if (mod.type === 'humidifier') {
+            const rh = getRelativeHumidity(tdb, w, pressure);
+            handleUpdateModuleParams(modId, { targetRh: Math.round(rh) });
+          }
+        }
+      }
+    },
+    [onUpdatePointCoordinates, ahuStepResults.steps, modules, pressure]
+  );
+
+  // Context menu actions inside chart in split view
+  const handleDeletePointInChart = useCallback(
+    (ptId: string) => {
+      if (onUpdatePointsAndProcesses) {
+        const remainingPoints = points.filter((p) => p.id !== ptId);
+        const remainingProcesses = processes.filter(
+          (p) => p.fromPointId !== ptId && p.toPointId !== ptId
+        );
+        onUpdatePointsAndProcesses(remainingPoints, remainingProcesses);
+      }
+    },
+    [points, processes, onUpdatePointsAndProcesses]
+  );
+
+  const handleDeleteProcessInChart = useCallback(
+    (procId: string) => {
+      if (onUpdatePointsAndProcesses) {
+        const remainingProcesses = processes.filter((p) => p.id !== procId);
+        onUpdatePointsAndProcesses(points, remainingProcesses);
+      }
+    },
+    [points, processes, onUpdatePointsAndProcesses]
+  );
+
+  const handleDuplicatePointInChart = useCallback(
+    (ptId: string) => {
+      const src = points.find((p) => p.id === ptId);
+      if (!src || !onUpdatePointsAndProcesses) return;
+      const newPt: StatePoint = {
+        ...src,
+        id: `pt-${Date.now()}`,
+        name: `${src.name} (Copia)`,
+        tdb: src.tdb + 1,
+      };
+      onUpdatePointsAndProcesses([...points, newPt], processes);
+    },
+    [points, processes, onUpdatePointsAndProcesses]
+  );
+
+  const handleLocateModuleInAhu = useCallback(
+    (targetId: string) => {
+      const step = ahuStepResults.steps.find(
+        (s) =>
+          s.module.id === targetId ||
+          s.associatedPointId === targetId ||
+          s.entryPoint.id === targetId ||
+          s.exitPoint.id === targetId
+      );
+      if (step) {
+        setEditingModuleId(step.module.id);
+        onSelectPoint(step.associatedPointId || step.exitPoint.id);
+      }
+    },
+    [ahuStepResults.steps, onSelectPoint]
+  );
 
   // Bidirectional sync: when selectedPointId changes from the left sidebar, highlight the corresponding module in the cut
   useEffect(() => {
@@ -1605,6 +1724,24 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
       const item = copy[index];
       copy[index] = copy[targetIndex];
       copy[targetIndex] = item;
+      updatedList = copy;
+      return copy;
+    });
+    if (autoSyncCycle) {
+      setTimeout(() => triggerSyncWithModules(updatedList), 30);
+    }
+  };
+
+  const handleReorderModule = (fromIndex: number, toSlotIndex: number) => {
+    if (fromIndex < 0 || fromIndex >= modules.length || toSlotIndex < 0) return;
+    if (toSlotIndex === fromIndex || toSlotIndex === fromIndex + 1) return;
+
+    let updatedList: AHUModuleItem[] = [];
+    setModules((prev) => {
+      const copy = [...prev];
+      const [item] = copy.splice(fromIndex, 1);
+      const adjustedTo = toSlotIndex > fromIndex ? toSlotIndex - 1 : toSlotIndex;
+      copy.splice(adjustedTo, 0, item);
       updatedList = copy;
       return copy;
     });
@@ -2236,6 +2373,7 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
               onSelectPoint={onSelectPoint}
               onSelectModuleAndPoint={handleSelectModuleAndPoint}
               onMoveModule={handleMoveModule}
+              onReorderModule={handleReorderModule}
               onRemoveModule={handleRemoveModule}
               onDragExistingModule={(idx) => {
                 setDraggedExistingIndex(idx);
@@ -2290,9 +2428,9 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
 
         {/* Split View */}
         {schematicMode === 'split_sync' && (
-          <div className="w-full flex-1 flex flex-col xl:flex-row gap-3 min-h-[500px] xl:min-h-0">
+          <div className="w-full flex-1 flex flex-col xl:flex-row gap-3 min-h-[580px] xl:h-[calc(100vh-175px)]">
             {/* Left Column: Interactive Psychrometric Chart */}
-            <div className="flex-1 h-full min-h-[340px] bg-slate-950/80 rounded-xl border border-slate-800 p-2 relative overflow-hidden flex flex-col shadow-xl">
+            <div className="flex-1 h-full min-h-[440px] bg-slate-950/80 rounded-xl border border-slate-800 p-2 relative overflow-hidden flex flex-col shadow-xl">
               {/* Isolation Selector Header */}
               <div className="flex items-center justify-between pb-1.5 mb-1 border-b border-slate-800/80 px-1 shrink-0">
                 <div className="flex items-center gap-2">
@@ -2305,23 +2443,55 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
                 <div className="flex items-center gap-1.5">
                   <span className="text-[10px] text-slate-400 hidden sm:inline">Aislar transformación:</span>
                   <select
-                    value={isolatedModuleId ?? 'all'}
-                    onChange={(e) => setIsolatedModuleId(e.target.value === 'all' ? null : e.target.value)}
+                    value={
+                      isolatedModuleId
+                        ? `mod:${isolatedModuleId}`
+                        : isolatedProcessId
+                        ? `proc:${isolatedProcessId}`
+                        : 'all'
+                    }
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val === 'all') {
+                        setIsolatedModuleId(null);
+                        setIsolatedProcessId(null);
+                      } else if (val.startsWith('mod:')) {
+                        setIsolatedModuleId(val.replace('mod:', ''));
+                        setIsolatedProcessId(null);
+                      } else if (val.startsWith('proc:')) {
+                        setIsolatedProcessId(val.replace('proc:', ''));
+                        setIsolatedModuleId(null);
+                      }
+                    }}
                     className="bg-slate-900 border border-slate-700 hover:border-cyan-400 rounded px-2 py-0.5 text-[10px] font-mono text-cyan-300 focus:outline-none cursor-pointer"
                   >
-                    <option value="all">Ciclo Completo (Todos)</option>
-                    {enabledModules.map((m, idx) => {
-                      const step = ahuStepResults.steps.find((s) => s.module.id === m.id);
-                      return (
-                        <option key={m.id} value={m.id}>
-                          {idx + 1}. {m.name} {step?.isTransformation ? `(${step.processName || 'Transformación'})` : '(Isentálpico / Pasivo)'}
-                        </option>
-                      );
-                    })}
+                    <option value="all">Ciclo Completo (Todos los procesos)</option>
+                    <optgroup label="Transformaciones por Módulo UTA">
+                      {enabledModules.map((m, idx) => {
+                        const step = ahuStepResults.steps.find((s) => s.module.id === m.id);
+                        return (
+                          <option key={m.id} value={`mod:${m.id}`}>
+                            {idx + 1}. {m.name} {step?.isTransformation ? `(${step.processName || 'Transformación'})` : '(Isentálpico / Pasivo)'}
+                          </option>
+                        );
+                      })}
+                    </optgroup>
+                    {processes.length > 0 && (
+                      <optgroup label="Procesos del Ciclo Psicrométrico">
+                        {processes.map((p) => (
+                          <option key={p.id} value={`proc:${p.id}`}>
+                            → {p.name} ({Math.abs(p.qTotal).toFixed(1)} kW)
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
                   </select>
-                  {isolatedModuleId && (
+                  {(isolatedModuleId || isolatedProcessId) && (
                     <button
-                      onClick={() => setIsolatedModuleId(null)}
+                      onClick={() => {
+                        setIsolatedModuleId(null);
+                        setIsolatedProcessId(null);
+                      }}
                       className="px-1.5 py-0.5 rounded text-[10px] bg-rose-950/60 hover:bg-rose-900 border border-rose-800/60 text-rose-300 font-bold transition-colors cursor-pointer"
                       title="Volver a mostrar el ciclo completo"
                     >
@@ -2331,19 +2501,99 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
                 </div>
               </div>
 
+              {/* Compact Isolated Process Status Pill outside of canvas (never covers diagram) */}
+              {isolatedProcessInfo && (
+                <div className="flex items-center justify-between gap-2 px-2.5 py-1 mb-1 rounded bg-slate-900/95 border border-cyan-500/40 text-[10.5px] font-mono shrink-0 shadow-md">
+                  <div className="flex items-center gap-1.5 min-w-0 truncate">
+                    <span className="w-2 h-2 rounded-full bg-cyan-400 shrink-0 animate-pulse" />
+                    <span className="text-cyan-300 font-bold truncate">
+                      {isolatedProcessInfo.moduleName}:
+                    </span>
+                    {isolatedProcessInfo.isPassive ? (
+                      <span className="text-amber-300 text-[10px] truncate">
+                        Isentálpico (ΔT = 0, Δw = 0) · Pérdida de carga ΔP: {isolatedProcessInfo.pressureDropPa ?? 0} Pa
+                      </span>
+                    ) : (
+                      <span className="text-slate-300 text-[10px] truncate flex items-center gap-1.5">
+                        <span>
+                          {isolatedProcessInfo.entryPoint.tdb.toFixed(1)}°C → {isolatedProcessInfo.exitPoint.tdb.toFixed(1)}°C
+                        </span>
+                        <span className="text-slate-600">|</span>
+                        <span>
+                          ΔT:{' '}
+                          <strong
+                            className={
+                              isolatedProcessInfo.exitPoint.tdb - isolatedProcessInfo.entryPoint.tdb < 0
+                                ? 'text-cyan-400'
+                                : 'text-rose-400'
+                            }
+                          >
+                            {isolatedProcessInfo.exitPoint.tdb - isolatedProcessInfo.entryPoint.tdb > 0 ? '+' : ''}
+                            {(isolatedProcessInfo.exitPoint.tdb - isolatedProcessInfo.entryPoint.tdb).toFixed(1)}°C
+                          </strong>
+                        </span>
+                        <span>
+                          Δw:{' '}
+                          <strong className="text-emerald-400">
+                            {((isolatedProcessInfo.exitPoint.w - isolatedProcessInfo.entryPoint.w) * 1000).toFixed(2)}{' '}
+                            g/kg
+                          </strong>
+                        </span>
+                        {isolatedProcessInfo.process && (
+                          <span>
+                            Q:{' '}
+                            <strong className="text-amber-400">
+                              {Math.abs(isolatedProcessInfo.process.qTotal).toFixed(1)} kW
+                            </strong>
+                          </span>
+                        )}
+                      </span>
+                    )}
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      setIsolatedModuleId(null);
+                      setIsolatedProcessId(null);
+                    }}
+                    className="text-[9.5px] px-2 py-0.5 rounded bg-rose-950/70 hover:bg-rose-900 border border-rose-800/60 text-rose-300 font-semibold transition-colors cursor-pointer shrink-0"
+                    title="Restablecer ciclo completo"
+                  >
+                    ✕ Ver Ciclo Completo
+                  </button>
+                </div>
+              )}
+
               <div className="flex-1 w-full h-full relative min-h-0">
                 <PsychrometricChart
                   points={points}
                   processes={processes}
                   selectedPointId={selectedPointId}
-                  onSelectPoint={(id) => id && onSelectPoint(id)}
-                  onUpdatePointCoordinates={onUpdatePointCoordinates || (() => {})}
+                  onSelectPoint={(id) => onSelectPoint(id)}
+                  onUpdatePointCoordinates={handleChartPointCoordinateUpdate}
                   onAddPointAtCoordinates={onAddPointAtCoordinates || (() => {})}
                   pressure={pressure}
                   chartType={chartType}
                   units={units}
                   layers={layers}
                   isolatedProcessInfo={isolatedProcessInfo}
+                  onSetIsolatedProcessInfo={(info) => {
+                    if (info?.moduleId) {
+                      setIsolatedModuleId(info.moduleId);
+                      setIsolatedProcessId(null);
+                    } else if (info?.processId) {
+                      setIsolatedProcessId(info.processId);
+                      setIsolatedModuleId(null);
+                    } else {
+                      setIsolatedModuleId(null);
+                      setIsolatedProcessId(null);
+                    }
+                  }}
+                  onDeletePoint={handleDeletePointInChart}
+                  onDeleteProcess={handleDeleteProcessInChart}
+                  onDuplicatePoint={handleDuplicatePointInChart}
+                  onLocateModuleInAhu={handleLocateModuleInAhu}
+                  isSplitView={true}
                 />
               </div>
             </div>
@@ -2424,8 +2674,8 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
                   cutViewMode={cutViewMode}
                   transform={{ zoom: 1, panX: 0, panY: 0 }}
                   isWhiteTheme={isWhiteTheme}
-                  isOverAhu={false}
-                  hoveredSlotIndex={null}
+                  isOverAhu={isOverAhu}
+                  hoveredSlotIndex={hoveredSlotIndex}
                   enabledModules={enabledModules}
                   moduleWidths={moduleWidths}
                   moduleDimensionsMeters={moduleDimensionsMeters}
@@ -2439,7 +2689,16 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
                   onSelectPoint={onSelectPoint}
                   onSelectModuleAndPoint={handleSelectModuleAndPoint}
                   onMoveModule={handleMoveModule}
+                  onReorderModule={handleReorderModule}
                   onRemoveModule={handleRemoveModule}
+                  onDragExistingModule={(idx) => {
+                    setDraggedExistingIndex(idx);
+                    setIsOverAhu(true);
+                  }}
+                  onDragEndExistingModule={() => {
+                    setIsOverAhu(false);
+                    setHoveredSlotIndex(null);
+                  }}
                   getIdaeModuleTitle={getIdaeModuleTitle}
                   isSplit={true}
                   propertiesDetailMode={propertiesDetailMode}
@@ -2477,454 +2736,37 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
 
       </div>
 
-      {/* ---------------- 4. PARAMETER CONFIGURATION DRAWER (FOR CLICKED / DROPPED MODULE) ---------------- */}
+      {/* ---------------- 4. COMPACT PARAMETER CONFIGURATION DRAWER (FOR CLICKED / DROPPED MODULE) ---------------- */}
       {activeEditingModule && (
-        <div className="panel-glass p-2.5 sm:p-3 border border-[#fbbf24]/40 shadow-glow space-y-2 shrink-0">
-          <div className="flex items-center justify-between pb-1.5 border-b border-[rgba(255,255,255,0.1)]">
-            <div className="flex items-center gap-2">
-              <div className="w-6 h-6 rounded-[4px] bg-[#fbbf24] text-black flex items-center justify-center font-bold shrink-0">
-                <Settings className="w-3.5 h-3.5" />
-              </div>
-              <div>
-                <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
-                  <span>Configuración: {activeEditingModule.name}</span>
-                  <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-[#0a0a0c] text-[#fbbf24] border border-[#fbbf24]/30">
-                    {activeEditingModule.type}
-                  </span>
-                </h4>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-1.5">
-              <button
-                onClick={() => setIsDrawerCollapsed(!isDrawerCollapsed)}
-                className="p-1 rounded-[5px] text-slate-300 hover:text-[#fbbf24] hover:bg-white/10 transition-colors flex items-center gap-1 text-[11px] font-mono px-2"
-                title={isDrawerCollapsed ? 'Expandir configuración' : 'Minimizar configuración'}
-              >
-                {isDrawerCollapsed ? (
-                  <>
-                    <ChevronDown className="w-3.5 h-3.5 text-[#fbbf24]" />
-                    <span>Expandir</span>
-                  </>
-                ) : (
-                  <>
-                    <ChevronUp className="w-3.5 h-3.5 text-slate-400" />
-                    <span>Minimizar</span>
-                  </>
-                )}
-              </button>
-
-              <button
-                onClick={() => handleToggleIsolateModule(activeEditingModule.id)}
-                className={`text-[11px] px-2.5 py-0.5 rounded-[5px] font-mono font-semibold transition-all flex items-center gap-1.5 cursor-pointer ${
-                  isolatedModuleId === activeEditingModule.id
-                    ? 'bg-cyan-500 text-slate-950 font-bold shadow-md shadow-cyan-500/30 border border-cyan-400'
-                    : 'bg-cyan-950/40 text-cyan-400 border border-cyan-700/50 hover:bg-cyan-900/50'
-                }`}
-                title="Aislar la transformación termodinámica de este módulo en el Diagrama Psicrométrico"
-              >
-                <Target className="w-3 h-3" />
-                <span>
-                  {isolatedModuleId === activeEditingModule.id
-                    ? 'Aislado en Carta (Ver Todo)'
-                    : 'Aislar en Carta'}
-                </span>
-              </button>
-
-              <button
-                onClick={() => handleDuplicateModule(activeEditingModule.id)}
-                className="btn-secondary text-[11px] !py-0.5 !px-2"
-                title="Duplicar este módulo"
-              >
-                <Copy className="w-3 h-3" />
-                <span className="hidden sm:inline">Duplicar</span>
-              </button>
-
-              <button
-                onClick={() => handleToggleModule(activeEditingModule.id)}
-                className={`text-[11px] px-2 py-0.5 rounded-[5px] font-mono font-semibold transition-colors ${
-                  activeEditingModule.enabled
-                    ? 'bg-[#65a30d]/20 text-[#a3e635] border border-[#65a30d]/60'
-                    : 'bg-[#1a1a1c] text-slate-500 border border-[rgba(255,255,255,0.1)]'
-                }`}
-              >
-                {activeEditingModule.enabled ? 'Activo' : 'En Bypass'}
-              </button>
-
-              <button
-                onClick={() => handleRemoveModule(activeEditingModule.id)}
-                className="btn-secondary text-[11px] !py-0.5 !px-1.5 !text-[#fca5a5] !border-[#ef4444]/40 hover:!border-[#ef4444]"
-                title="Eliminar este módulo de la UTA"
-              >
-                <Trash2 className="w-3 h-3" />
-              </button>
-
-              <button
-                onClick={() => setEditingModuleId(null)}
-                className="p-1 rounded-[5px] text-[#cbd5e1] hover:text-white hover:bg-[rgba(255,255,255,0.1)]"
-                title="Cerrar panel de configuración"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
-
-          {!isDrawerCollapsed && (
-            <>
-
-          {/* Detailed Thermodynamic Changes Generated by this Module */}
-          {(() => {
-            const step = ahuStepResults.steps.find((s) => s.module.id === activeEditingModule.id);
-            if (!step) return null;
-            const deltaT = step.exitPoint.tdb - step.entryPoint.tdb;
-            const deltaRh = step.exitPoint.rh - step.entryPoint.rh;
-            const deltaW = (step.exitPoint.w - step.entryPoint.w) * 1000;
-            const deltaH = step.exitPoint.h - step.entryPoint.h;
-
-            return (
-              <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 text-xs space-y-2">
-                <div className="flex flex-wrap items-center justify-between gap-1 text-[11px] font-mono font-bold text-cyan-300">
-                  <span className="flex items-center gap-1.5">
-                    <Activity className="w-3.5 h-3.5 text-cyan-400" />
-                    <span>Propiedades Termodinámicas que modifica este Módulo:</span>
-                  </span>
-                  <span className="text-slate-400 font-normal">
-                    Entrada: {step.entryPoint.tdb.toFixed(1)}°C, {step.entryPoint.rh.toFixed(0)}% HR → Salida: {step.exitPoint.tdb.toFixed(1)}°C, {step.exitPoint.rh.toFixed(0)}% HR
-                  </span>
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 font-mono text-[11px]">
-                  <div className="bg-slate-900/90 p-2 rounded-lg border border-slate-800/80">
-                    <span className="text-[10px] text-slate-500 block">Salto Térmico ΔT:</span>
-                    <span className={`font-bold text-xs ${deltaT < 0 ? 'text-cyan-400' : deltaT > 0 ? 'text-rose-400' : 'text-slate-300'}`}>
-                      {deltaT > 0 ? '+' : ''}{deltaT.toFixed(1)} °C
-                    </span>
-                  </div>
-                  <div className="bg-slate-900/90 p-2 rounded-lg border border-slate-800/80">
-                    <span className="text-[10px] text-slate-500 block">Variación ΔHR:</span>
-                    <span className={`font-bold text-xs ${deltaRh > 0 ? 'text-cyan-400' : deltaRh < 0 ? 'text-amber-400' : 'text-slate-300'}`}>
-                      {deltaRh > 0 ? '+' : ''}{deltaRh.toFixed(0)} %
-                    </span>
-                  </div>
-                  <div className="bg-slate-900/90 p-2 rounded-lg border border-slate-800/80">
-                    <span className="text-[10px] text-slate-500 block">Humedad Δw:</span>
-                    <span className={`font-bold text-xs ${Math.abs(deltaW) < 0.05 ? 'text-slate-400' : deltaW < 0 ? 'text-cyan-300' : 'text-emerald-400'}`}>
-                      {Math.abs(deltaW) < 0.05 ? '0 (cte)' : `${deltaW > 0 ? '+' : ''}${deltaW.toFixed(2)} g/kg`}
-                    </span>
-                  </div>
-                  <div className="bg-slate-900/90 p-2 rounded-lg border border-slate-800/80">
-                    <span className="text-[10px] text-slate-500 block">Salto Entálpico Δh:</span>
-                    <span className="font-bold text-xs text-amber-300">
-                      {deltaH > 0 ? '+' : ''}{deltaH.toFixed(1)} kJ/kg
-                    </span>
-                  </div>
-                  <div className="bg-slate-900/90 p-2 rounded-lg border border-slate-800/80">
-                    <span className="text-[10px] text-slate-500 block">Pérdida Carga ΔP:</span>
-                    <span className="font-bold text-xs text-rose-300">
-                      -{activeEditingModule.pressureDropPa} Pa
-                    </span>
-                  </div>
-                </div>
-
-                {!step.isTransformation && (
-                  <div className="bg-amber-950/30 border border-amber-800/40 rounded-lg p-2 text-[11px] font-mono text-amber-300 flex items-center justify-between gap-2">
-                    <span>
-                      ℹ️ Módulo pasivo isentálpico: el estado psicrométrico permanece inalterado (ΔT = 0, Δw = 0, Δh = 0). Aporta una pérdida de carga estática de {activeEditingModule.pressureDropPa} Pa.
-                    </span>
-                    <button
-                      onClick={() => handleToggleIsolateModule(activeEditingModule.id)}
-                      className="px-2 py-0.5 rounded bg-cyan-950 border border-cyan-500/50 text-cyan-300 hover:text-white text-[10px] whitespace-nowrap cursor-pointer flex items-center gap-1"
-                    >
-                      <Target className="w-3 h-3" />
-                      <span>Ver en Carta</span>
-                    </button>
-                  </div>
-                )}
-              </div>
+        <ModuleConfigDrawer
+          module={activeEditingModule}
+          step={ahuStepResults.steps.find((s) => s.module.id === activeEditingModule.id)}
+          isolatedModuleId={isolatedModuleId}
+          isDrawerCollapsed={isDrawerCollapsed}
+          onToggleCollapse={() => setIsDrawerCollapsed(!isDrawerCollapsed)}
+          onUpdateParams={handleUpdateModuleParams}
+          onUpdatePressureDrop={(id, pa) => {
+            setModules((prev) => {
+              const updated = prev.map((m) =>
+                m.id === id ? { ...m, pressureDropPa: Math.max(0, pa) } : m
+              );
+              if (autoSyncCycle) {
+                setTimeout(() => triggerSyncWithModules(updated), 30);
+              }
+              return updated;
+            });
+          }}
+          onUpdateName={(id, name) => {
+            setModules((prev) =>
+              prev.map((m) => (m.id === id ? { ...m, name } : m))
             );
-          })()}
-
-          {/* Module-Specific Controls */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3.5 text-xs">
-            {/* Pérdida de carga */}
-            <div className="space-y-1 bg-[#0a0a0c]/80 p-2.5 rounded-[6px] border border-[rgba(255,255,255,0.1)]">
-              <label className="text-[11px] font-semibold text-[#cbd5e1]">Pérdida de Carga ΔP (Pa):</label>
-              <input
-                type="number"
-                value={activeEditingModule.pressureDropPa}
-                onChange={(e) =>
-                  setModules((prev) =>
-                    prev.map((m) =>
-                      m.id === activeEditingModule.id
-                        ? { ...m, pressureDropPa: Math.max(0, Number(e.target.value)) }
-                        : m
-                    )
-                  )
-                }
-                className="w-full input-pro !py-1 font-mono text-[#fbbf24]"
-              />
-            </div>
-
-            {/* Intake Damper */}
-            {activeEditingModule.type === 'intake_damper' && (
-              <div className="space-y-1 bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80 col-span-2">
-                <div className="flex justify-between">
-                  <label className="text-[11px] font-semibold text-slate-300">Apertura Compuerta ODA:</label>
-                  <span className="font-mono text-emerald-300 font-bold">
-                    {((activeEditingModule.params.outdoorRatio ?? 0.3) * 100).toFixed(0)}%
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min="0.1"
-                  max="1.0"
-                  step="0.05"
-                  value={activeEditingModule.params.outdoorRatio ?? 0.3}
-                  onChange={(e) => handleUpdateModuleParams(activeEditingModule.id, { outdoorRatio: Number(e.target.value) })}
-                  className="w-full accent-emerald-400"
-                />
-              </div>
-            )}
-
-            {/* Prefilter / Final Filter */}
-            {(activeEditingModule.type === 'prefilter' || activeEditingModule.type === 'final_filter') && (
-              <div className="space-y-1 bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80 col-span-2">
-                <label className="text-[11px] font-semibold text-slate-300">Clase de Eficiencia de Filtrado:</label>
-                <select
-                  value={activeEditingModule.params.filterClass || (activeEditingModule.type === 'prefilter' ? 'G4' : 'F7')}
-                  onChange={(e) => handleUpdateModuleParams(activeEditingModule.id, { filterClass: e.target.value as any })}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg p-1.5 text-slate-200 text-xs"
-                >
-                  <option value="G4">G4 / ISO Coarse 65% (Prefiltrado polvo y polen)</option>
-                  <option value="M5">M5 / ePM10 50% (Media eficacia)</option>
-                  <option value="F7">F7 / ePM1 70% (Filtro fino estándar RITE)</option>
-                  <option value="F9">F9 / ePM1 85% (Alta eficacia partículas finas)</option>
-                  <option value="HEPA_H13">HEPA H13 (99.95% Salas blancas / Hospitales)</option>
-                </select>
-              </div>
-            )}
-
-            {/* Cooling Coil */}
-            {activeEditingModule.type === 'cooling_coil' && (
-              <>
-                <div className="space-y-1 bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80">
-                  <div className="flex justify-between">
-                    <label className="text-[11px] font-semibold text-slate-300">T. Salida Bulbo Seco:</label>
-                    <span className="font-mono text-cyan-300 font-bold">{activeEditingModule.params.exitTdb ?? 12.8}°C</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="8.0"
-                    max="20.0"
-                    step="0.1"
-                    value={activeEditingModule.params.exitTdb ?? 12.8}
-                    onChange={(e) => handleUpdateModuleParams(activeEditingModule.id, { exitTdb: Number(e.target.value) })}
-                    className="w-full accent-cyan-400"
-                  />
-                </div>
-                <div className="space-y-1 bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80">
-                  <div className="flex justify-between">
-                    <label className="text-[11px] font-semibold text-slate-300">HR Salida:</label>
-                    <span className="font-mono text-emerald-300 font-bold">{activeEditingModule.params.exitRh ?? 95}%</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="75"
-                    max="98"
-                    step="1"
-                    value={activeEditingModule.params.exitRh ?? 95}
-                    onChange={(e) => handleUpdateModuleParams(activeEditingModule.id, { exitRh: Number(e.target.value) })}
-                    className="w-full accent-emerald-400"
-                  />
-                </div>
-                <div className="space-y-1 bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80">
-                  <label className="text-[11px] font-semibold text-slate-300">Fluido Caloportador:</label>
-                  <select
-                    value={activeEditingModule.params.fluid ?? 'water_7_12'}
-                    onChange={(e) => handleUpdateModuleParams(activeEditingModule.id, { fluid: e.target.value as any })}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg p-1.5 text-slate-200 text-xs"
-                  >
-                    <option value="water_7_12">Agua enfriada 7 / 12 °C (Chiller)</option>
-                    <option value="dx_r32">Expansión Directa R32</option>
-                    <option value="dx_r410a">Expansión Directa R410A</option>
-                  </select>
-                </div>
-              </>
-            )}
-
-            {/* Heating Coil */}
-            {activeEditingModule.type === 'heating_coil' && (
-              <>
-                <div className="space-y-1 bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80">
-                  <div className="flex justify-between">
-                    <label className="text-[11px] font-semibold text-slate-300">T. Objetivo Calefacción:</label>
-                    <span className="font-mono text-rose-300 font-bold">{activeEditingModule.params.heatingTdb ?? 16.5}°C</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="14.0"
-                    max="35.0"
-                    step="0.5"
-                    value={activeEditingModule.params.heatingTdb ?? 16.5}
-                    onChange={(e) => handleUpdateModuleParams(activeEditingModule.id, { heatingTdb: Number(e.target.value) })}
-                    className="w-full accent-rose-400"
-                  />
-                </div>
-                <div className="space-y-1 bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80 col-span-2">
-                  <label className="text-[11px] font-semibold text-slate-300">Fuente de Calor:</label>
-                  <select
-                    value={activeEditingModule.params.heatingSource ?? 'hot_water'}
-                    onChange={(e) => handleUpdateModuleParams(activeEditingModule.id, { heatingSource: e.target.value as any })}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg p-1.5 text-slate-200 text-xs"
-                  >
-                    <option value="hot_water">Agua caliente 60/50°C (Caldera / Aerotermia)</option>
-                    <option value="electric_resistance">Resistencias eléctricas modulantes</option>
-                    <option value="heat_pump">Gas refrigerante (Bomba de calor)</option>
-                  </select>
-                </div>
-              </>
-            )}
-
-            {/* Mixing Box */}
-            {activeEditingModule.type === 'mixing_box' && (
-              <div className="space-y-1 bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80 col-span-2">
-                <div className="flex justify-between">
-                  <label className="text-[11px] font-semibold text-slate-300">
-                    Proporción Aire Exterior (ODA):
-                  </label>
-                  <span className="font-mono text-amber-300 font-bold">
-                    {((activeEditingModule.params.outdoorRatio ?? 0.3) * 100).toFixed(0)}% ODA / {(100 - (activeEditingModule.params.outdoorRatio ?? 0.3) * 100).toFixed(0)}% RA
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min="0.1"
-                  max="1.0"
-                  step="0.05"
-                  value={activeEditingModule.params.outdoorRatio ?? 0.3}
-                  onChange={(e) => handleUpdateModuleParams(activeEditingModule.id, { outdoorRatio: Number(e.target.value) })}
-                  className="w-full accent-amber-400"
-                />
-              </div>
-            )}
-
-            {/* Heat Recovery */}
-            {activeEditingModule.type === 'heat_recovery' && (
-              <>
-                <div className="space-y-1 bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80">
-                  <div className="flex justify-between">
-                    <label className="text-[11px] font-semibold text-slate-300">Eficiencia Térmica η:</label>
-                    <span className="font-mono text-sky-300 font-bold">
-                      {((activeEditingModule.params.recoveryEfficiency ?? 0.75) * 100).toFixed(0)}%
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0.5"
-                    max="0.88"
-                    step="0.01"
-                    value={activeEditingModule.params.recoveryEfficiency ?? 0.75}
-                    onChange={(e) => handleUpdateModuleParams(activeEditingModule.id, { recoveryEfficiency: Number(e.target.value) })}
-                    className="w-full accent-sky-400"
-                  />
-                </div>
-                <div className="space-y-1 bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80">
-                  <label className="text-[11px] font-semibold text-slate-300">Tecnología:</label>
-                  <select
-                    value={activeEditingModule.params.recoveryType ?? 'plates'}
-                    onChange={(e) => handleUpdateModuleParams(activeEditingModule.id, { recoveryType: e.target.value as any })}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg p-1.5 text-slate-200 text-xs"
-                  >
-                    <option value="plates">Placas de flujo cruzado (RITE)</option>
-                    <option value="rotary_wheel">Rueda entálpica rotativa</option>
-                  </select>
-                </div>
-              </>
-            )}
-
-            {/* Humidifier */}
-            {activeEditingModule.type === 'humidifier' && (
-              <>
-                <div className="space-y-1 bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80">
-                  <div className="flex justify-between">
-                    <label className="text-[11px] font-semibold text-slate-300">Humedad Relativa Objetivo:</label>
-                    <span className="font-mono text-purple-300 font-bold">{activeEditingModule.params.targetRh ?? 50}%</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="30"
-                    max="75"
-                    step="1"
-                    value={activeEditingModule.params.targetRh ?? 50}
-                    onChange={(e) => handleUpdateModuleParams(activeEditingModule.id, { targetRh: Number(e.target.value) })}
-                    className="w-full accent-purple-400"
-                  />
-                </div>
-                <div className="space-y-1 bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80">
-                  <label className="text-[11px] font-semibold text-slate-300">Tipo de Humidificación:</label>
-                  <select
-                    value={activeEditingModule.params.humidifierType ?? 'steam'}
-                    onChange={(e) => handleUpdateModuleParams(activeEditingModule.id, { humidifierType: e.target.value as any })}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg p-1.5 text-slate-200 text-xs"
-                  >
-                    <option value="steam">Vapor seco isotérmico (T ≈ cte)</option>
-                    <option value="evaporative_pad">Panel evaporativo adiabático (h ≈ cte)</option>
-                  </select>
-                </div>
-              </>
-            )}
-
-            {/* Fan */}
-            {activeEditingModule.type === 'fan' && (
-              <>
-                <div className="space-y-1 bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80">
-                  <div className="flex justify-between">
-                    <label className="text-[11px] font-semibold text-slate-300">Salto Térmico del Rodete:</label>
-                    <span className="font-mono text-emerald-300 font-bold">+{activeEditingModule.params.tempRise ?? 0.8}°C</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0.4"
-                    max="1.6"
-                    step="0.1"
-                    value={activeEditingModule.params.tempRise ?? 0.8}
-                    onChange={(e) => handleUpdateModuleParams(activeEditingModule.id, { tempRise: Number(e.target.value) })}
-                    className="w-full accent-emerald-400"
-                  />
-                </div>
-                <div className="space-y-1 bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80">
-                  <label className="text-[11px] font-semibold text-slate-300">Presión Estática Disponible (Pa):</label>
-                  <input
-                    type="number"
-                    value={activeEditingModule.params.staticPressurePa ?? 450}
-                    onChange={(e) => handleUpdateModuleParams(activeEditingModule.id, { staticPressurePa: Number(e.target.value) })}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg p-1.5 font-mono text-emerald-300"
-                  />
-                </div>
-              </>
-            )}
-
-            {/* Silencer */}
-            {activeEditingModule.type === 'silencer' && (
-              <div className="space-y-1 bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80 col-span-2">
-                <div className="flex justify-between">
-                  <label className="text-[11px] font-semibold text-slate-300">Atenuación Acústica Global:</label>
-                  <span className="font-mono text-slate-300 font-bold">{activeEditingModule.params.attenuationDb ?? 18} dB</span>
-                </div>
-                <input
-                  type="range"
-                  min="8"
-                  max="32"
-                  step="1"
-                  value={activeEditingModule.params.attenuationDb ?? 18}
-                  onChange={(e) => handleUpdateModuleParams(activeEditingModule.id, { attenuationDb: Number(e.target.value) })}
-                  className="w-full accent-slate-400"
-                />
-              </div>
-            )}
-          </div>
-          </>
-        )}
-        </div>
+          }}
+          onToggleModule={handleToggleModule}
+          onDuplicateModule={handleDuplicateModule}
+          onRemoveModule={handleRemoveModule}
+          onToggleIsolateModule={handleToggleIsolateModule}
+          onClose={() => setEditingModuleId(null)}
+        />
       )}
 
       {/* IDAE & UNE-EN 12792 Symbol Guide Modal */}

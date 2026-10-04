@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
 import {
   StatePoint,
   AHUModuleItem,
@@ -28,6 +28,7 @@ export interface AhuLongitudinalSvgProps {
   onSelectPoint: (id: string) => void;
   onSelectModuleAndPoint: (modId: string, ptId?: string) => void;
   onMoveModule?: (index: number, direction: 'left' | 'right') => void;
+  onReorderModule?: (fromIndex: number, toSlotIndex: number) => void;
   onRemoveModule?: (id: string) => void;
   onDragExistingModule?: (index: number) => void;
   onDragEndExistingModule?: () => void;
@@ -61,6 +62,7 @@ export const AhuLongitudinalSvg: React.FC<AhuLongitudinalSvgProps> = ({
   onSelectPoint,
   onSelectModuleAndPoint,
   onMoveModule,
+  onReorderModule,
   onRemoveModule,
   onDragExistingModule,
   onDragEndExistingModule,
@@ -71,6 +73,84 @@ export const AhuLongitudinalSvg: React.FC<AhuLongitudinalSvgProps> = ({
   isolatedModuleId = null,
 }) => {
   const [hoveredTransition, setHoveredTransition] = useState<number | null>(null);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const chassisGroupRef = useRef<SVGGElement | null>(null);
+  const [draggedModuleIndex, setDraggedModuleIndex] = useState<number | null>(null);
+  const [internalHoveredSlot, setInternalHoveredSlot] = useState<number | null>(null);
+
+  const slotXPositions = useMemo(() => {
+    let runX = 6;
+    const slots = [runX];
+    enabledModules.forEach((m) => {
+      runX += (moduleWidths[m.type] || 120) + MODULE_SPACING;
+      slots.push(runX);
+    });
+    return slots;
+  }, [enabledModules, moduleWidths]);
+
+  const handleGripPointerDown = (e: React.PointerEvent, idx: number) => {
+    e.stopPropagation();
+    e.preventDefault();
+    try {
+      (e.currentTarget as Element).setPointerCapture(e.pointerId);
+    } catch {}
+    setDraggedModuleIndex(idx);
+    setInternalHoveredSlot(idx);
+    onDragExistingModule?.(idx);
+  };
+
+  const handleGripPointerMove = (e: React.PointerEvent) => {
+    if (draggedModuleIndex === null) return;
+    e.stopPropagation();
+
+    if (!svgRef.current || !chassisGroupRef.current) return;
+    const pt = svgRef.current.createSVGPoint();
+    pt.x = e.clientX;
+    pt.y = e.clientY;
+    const matrix = chassisGroupRef.current.getScreenCTM();
+    if (!matrix) return;
+    const localP = pt.matrixTransform(matrix.inverse());
+    const localX = localP.x;
+
+    let nearestSlot = 0;
+    let minDiff = Infinity;
+    slotXPositions.forEach((sx, sIdx) => {
+      const diff = Math.abs(localX - sx);
+      if (diff < minDiff) {
+        minDiff = diff;
+        nearestSlot = sIdx;
+      }
+    });
+    setInternalHoveredSlot(nearestSlot);
+  };
+
+  const handleGripPointerUp = (e: React.PointerEvent) => {
+    if (draggedModuleIndex === null) return;
+    e.stopPropagation();
+    try {
+      (e.currentTarget as Element).releasePointerCapture(e.pointerId);
+    } catch {}
+
+    const from = draggedModuleIndex;
+    const to = internalHoveredSlot;
+
+    setDraggedModuleIndex(null);
+    setInternalHoveredSlot(null);
+    onDragEndExistingModule?.();
+
+    if (to !== null && from !== null && to !== from && to !== from + 1) {
+      if (onReorderModule) {
+        onReorderModule(from, to);
+      } else if (onMoveModule) {
+        const adjustedTo = to > from ? to - 1 : to;
+        const diff = adjustedTo - from;
+        const dir = diff > 0 ? 'right' : 'left';
+        for (let i = 0; i < Math.abs(diff); i++) {
+          onMoveModule(from + (dir === 'right' ? i : -i), dir);
+        }
+      }
+    }
+  };
 
   const effZoom = isSplit ? 1 : transform.zoom;
   const effPanX = isSplit ? 0 : transform.panX;
@@ -115,6 +195,7 @@ export const AhuLongitudinalSvg: React.FC<AhuLongitudinalSvgProps> = ({
 
   return (
     <svg
+      ref={svgRef}
       viewBox={`0 0 ${dynamicSvgViewBoxWidth} ${viewBoxHeight}`}
       className="w-full h-full drop-shadow-2xl overflow-hidden select-none"
       preserveAspectRatio="xMidYMid meet"
@@ -281,7 +362,7 @@ export const AhuLongitudinalSvg: React.FC<AhuLongitudinalSvgProps> = ({
         </g>
 
         {/* ---------------- TRAIN 1: ELEVATION (OR ACTIVE VIEW) ---------------- */}
-        <g transform={`translate(${ahuStartX}, ${cutViewMode === 'dual' ? 48 : chassisY})`}>
+        <g ref={chassisGroupRef} transform={`translate(${ahuStartX}, ${cutViewMode === 'dual' ? 48 : chassisY})`}>
           {cutViewMode === 'dual' && (
             <text
               x="10"
@@ -392,42 +473,34 @@ export const AhuLongitudinalSvg: React.FC<AhuLongitudinalSvgProps> = ({
           <rect x="0" y="180" width={dynamicChassisWidth} height="6" fill={isWhiteTheme ? '#E2E8F0' : '#1E293B'} opacity="0.9" />
 
           {/* Insertion Drop Guides when dragging from palette or reordering */}
-          {isOverAhu && (
+          {(isOverAhu || draggedModuleIndex !== null) && (
             <g className="insertion-guides" pointerEvents="none">
-              {(() => {
-                let runningX = 6;
-                const slots = [runningX];
-                enabledModules.forEach((m) => {
-                  runningX += (moduleWidths[m.type] || 120) + MODULE_SPACING;
-                  slots.push(runningX);
-                });
-
-                return slots.map((sx, sIdx) => {
-                  const isHovered = hoveredSlotIndex === sIdx;
-                  return (
-                    <g key={`drop-slot-${sIdx}`} transform={`translate(${sx - 4}, 6)`}>
-                      <rect
-                        x="0"
-                        y="0"
-                        width="8"
-                        height="174"
-                        fill={isHovered ? '#38BDF8' : '#0284C7'}
-                        opacity={isHovered ? 0.95 : 0.35}
-                        stroke="#38BDF8"
-                        strokeDasharray="4,3"
-                      />
-                      {isHovered && (
-                        <g transform="translate(4, 87)">
-                          <circle cx="0" cy="0" r="14" fill="#0284C7" stroke="#38BDF8" strokeWidth="2.5" />
-                          <text x="0" y="5" textAnchor="middle" fill="#FFFFFF" fontSize="13" fontWeight="bold">
-                            +
-                          </text>
-                        </g>
-                      )}
-                    </g>
-                  );
-                });
-              })()}
+              {slotXPositions.map((sx, sIdx) => {
+                const effectiveSlot = draggedModuleIndex !== null ? internalHoveredSlot : hoveredSlotIndex;
+                const isHovered = effectiveSlot === sIdx;
+                return (
+                  <g key={`drop-slot-${sIdx}`} transform={`translate(${sx - 4}, 6)`}>
+                    <rect
+                      x="0"
+                      y="0"
+                      width="8"
+                      height="174"
+                      fill={isHovered ? '#38BDF8' : '#0284C7'}
+                      opacity={isHovered ? 0.95 : 0.35}
+                      stroke="#38BDF8"
+                      strokeDasharray="4,3"
+                    />
+                    {isHovered && (
+                      <g transform="translate(4, 87)">
+                        <circle cx="0" cy="0" r="14" fill="#0284C7" stroke="#38BDF8" strokeWidth="2.5" />
+                        <text x="0" y="5" textAnchor="middle" fill="#FFFFFF" fontSize="13" fontWeight="bold">
+                          +
+                        </text>
+                      </g>
+                    )}
+                  </g>
+                );
+              })}
             </g>
           )}
 
@@ -534,9 +607,11 @@ export const AhuLongitudinalSvg: React.FC<AhuLongitudinalSvgProps> = ({
                           ? '#FFFFFF'
                           : '#090E1A'
                       }
-                      fillOpacity={isModActive || isStepPointSelected ? 0.95 : 0.5}
+                      fillOpacity={draggedModuleIndex === index ? 0.2 : (isModActive || isStepPointSelected ? 0.95 : 0.5)}
                       stroke={
-                        isStepPointSelected
+                        draggedModuleIndex === index
+                          ? '#38BDF8'
+                          : isStepPointSelected
                           ? '#0284C7'
                           : isModActive
                           ? '#F59E0B'
@@ -544,7 +619,8 @@ export const AhuLongitudinalSvg: React.FC<AhuLongitudinalSvgProps> = ({
                           ? '#CBD5E1'
                           : '#1E293B'
                       }
-                      strokeWidth={isModActive || isStepPointSelected ? '2' : '1'}
+                      strokeWidth={draggedModuleIndex === index ? '2.5' : (isModActive || isStepPointSelected ? '2' : '1')}
+                      strokeDasharray={draggedModuleIndex === index ? '4,2' : undefined}
                     />
 
                     {/* Glowing highlight border when isolated in psychrometric chart */}
@@ -565,7 +641,7 @@ export const AhuLongitudinalSvg: React.FC<AhuLongitudinalSvgProps> = ({
                     )}
 
                     {/* Official IDAE Section Technical Symbol */}
-                    <g className="transition-transform group-hover:scale-[1.005] transform-origin-center">
+                    <g>
                       <IDAESectionSymbol
                         mod={mod}
                         modWidth={modWidth}
@@ -575,14 +651,22 @@ export const AhuLongitudinalSvg: React.FC<AhuLongitudinalSvgProps> = ({
                       />
                     </g>
 
-                    {/* UPPER LAYER NAVIGATION & DRAG CONTROLS (Appears ONLY on hover so drawing stays clean like 01.png) */}
-                    {!isSplit && (
-                      <g className="module-upper-controls opacity-0 group-hover:opacity-100 transition-opacity">
+                    {/* UPPER LAYER NAVIGATION & DRAG CONTROLS */}
+                    {(onMoveModule || onReorderModule || onRemoveModule) && (
+                      <g
+                        className={`module-upper-controls transition-opacity ${
+                          draggedModuleIndex !== null
+                            ? draggedModuleIndex === index
+                              ? 'opacity-100'
+                              : 'opacity-0'
+                            : 'opacity-0 group-hover:opacity-100'
+                        }`}
+                      >
                         <g transform="translate(4, 5)">
                           <rect
                             x="0"
                             y="0"
-                            width={onMoveModule ? (index > 0 && index < enabledModules.length - 1 ? 64 : 46) : 22}
+                            width={onMoveModule || onReorderModule ? (index > 0 && index < enabledModules.length - 1 ? 64 : 46) : 22}
                             height="19"
                             rx="9.5"
                             fill="#0A0F1D"
@@ -591,42 +675,65 @@ export const AhuLongitudinalSvg: React.FC<AhuLongitudinalSvgProps> = ({
                             filter="url(#glowDrop)"
                           />
 
-                          {/* Drag Grip Handle (⋮⋮) */}
+                          {/* Drag Grip Handle (⋮⋮) - Interactive reordering */}
                           <g
                             transform="translate(4, 1.5)"
-                            className="cursor-grab active:cursor-grabbing hover:opacity-100"
-                            {...({ draggable: true } as any)}
-                            onDragStart={(e: React.DragEvent<SVGGElement>) => {
-                              e.stopPropagation();
-                              e.dataTransfer.setData('application/ahu-existing-index', String(index));
-                              e.dataTransfer.effectAllowed = 'move';
-                              onDragExistingModule?.(index);
-                            }}
-                            onDragEnd={() => {
-                              onDragEndExistingModule?.();
-                            }}
+                            className="cursor-grab active:cursor-grabbing group/grip"
+                            style={{ touchAction: 'none' }}
+                            onPointerDown={(e) => handleGripPointerDown(e, index)}
+                            onPointerMove={handleGripPointerMove}
+                            onPointerUp={handleGripPointerUp}
+                            onPointerCancel={handleGripPointerUp}
                           >
-                            <rect x="-2" y="-1" width="14" height="17" fill="transparent" />
-                            <circle cx="2.5" cy="3.5" r="1.3" fill="#38BDF8" />
-                            <circle cx="7.5" cy="3.5" r="1.3" fill="#38BDF8" />
-                            <circle cx="2.5" cy="8" r="1.3" fill="#38BDF8" />
-                            <circle cx="7.5" cy="8" r="1.3" fill="#38BDF8" />
-                            <circle cx="2.5" cy="12.5" r="1.3" fill="#38BDF8" />
-                            <circle cx="7.5" cy="12.5" r="1.3" fill="#38BDF8" />
+                            <title>Arrastra estos puntos para mover y reubicar esta sección en la UTA</title>
+                            <rect
+                              x="-2"
+                              y="-1"
+                              width="16"
+                              height="17"
+                              rx="3"
+                              fill="transparent"
+                              className="group-hover/grip:fill-cyan-500/25 transition-colors"
+                            />
+                            <circle cx="2.5" cy="3.5" r="1.3" fill={draggedModuleIndex === index ? '#F59E0B' : '#38BDF8'} />
+                            <circle cx="7.5" cy="3.5" r="1.3" fill={draggedModuleIndex === index ? '#F59E0B' : '#38BDF8'} />
+                            <circle cx="2.5" cy="8" r="1.3" fill={draggedModuleIndex === index ? '#F59E0B' : '#38BDF8'} />
+                            <circle cx="7.5" cy="8" r="1.3" fill={draggedModuleIndex === index ? '#F59E0B' : '#38BDF8'} />
+                            <circle cx="2.5" cy="12.5" r="1.3" fill={draggedModuleIndex === index ? '#F59E0B' : '#38BDF8'} />
+                            <circle cx="7.5" cy="12.5" r="1.3" fill={draggedModuleIndex === index ? '#F59E0B' : '#38BDF8'} />
                           </g>
 
                           {/* Reorder Left Button (◀) */}
                           {onMoveModule && index > 0 && (
                             <g
                               transform="translate(17, 1.5)"
-                              className="cursor-pointer hover:scale-110 transition-transform"
+                              className="cursor-pointer group/arrow"
+                              onMouseDown={(e) => e.stopPropagation()}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 onMoveModule(index, 'left');
                               }}
                             >
-                              <circle cx="7.5" cy="7.5" r="7" fill="#1E293B" stroke="#475569" strokeWidth="1" />
-                              <text x="7.5" y="10.5" textAnchor="middle" fill="#FFFFFF" fontSize="8.5" fontWeight="bold">◀</text>
+                              <circle
+                                cx="7.5"
+                                cy="7.5"
+                                r="7"
+                                fill="#1E293B"
+                                stroke="#475569"
+                                strokeWidth="1"
+                                className="group-hover/arrow:fill-slate-700 group-hover/arrow:stroke-cyan-400 transition-colors"
+                              />
+                              <text
+                                x="7.5"
+                                y="10.5"
+                                textAnchor="middle"
+                                fill="#FFFFFF"
+                                fontSize="8.5"
+                                fontWeight="bold"
+                                className="pointer-events-none select-none"
+                              >
+                                ◀
+                              </text>
                             </g>
                           )}
 
@@ -634,30 +741,71 @@ export const AhuLongitudinalSvg: React.FC<AhuLongitudinalSvgProps> = ({
                           {onMoveModule && index < enabledModules.length - 1 && (
                             <g
                               transform={`translate(${index > 0 ? 35 : 17}, 1.5)`}
-                              className="cursor-pointer hover:scale-110 transition-transform"
+                              className="cursor-pointer group/arrow"
+                              onMouseDown={(e) => e.stopPropagation()}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 onMoveModule(index, 'right');
                               }}
                             >
-                              <circle cx="7.5" cy="7.5" r="7" fill="#1E293B" stroke="#475569" strokeWidth="1" />
-                              <text x="7.5" y="10.5" textAnchor="middle" fill="#FFFFFF" fontSize="8.5" fontWeight="bold">▶</text>
+                              <circle
+                                cx="7.5"
+                                cy="7.5"
+                                r="7"
+                                fill="#1E293B"
+                                stroke="#475569"
+                                strokeWidth="1"
+                                className="group-hover/arrow:fill-slate-700 group-hover/arrow:stroke-cyan-400 transition-colors"
+                              />
+                              <text
+                                x="7.5"
+                                y="10.5"
+                                textAnchor="middle"
+                                fill="#FFFFFF"
+                                fontSize="8.5"
+                                fontWeight="bold"
+                                className="pointer-events-none select-none"
+                              >
+                                ▶
+                              </text>
                             </g>
                           )}
                         </g>
 
-                        {/* Direct Removal Button (✕) */}
+                        {/* Direct Removal Button (✕) - Rock-solid stationary anchor with zero displacement/jitter */}
                         {onRemoveModule && (
                           <g
                             transform={`translate(${modWidth - 23}, 5)`}
-                            className="cursor-pointer hover:scale-110 transition-transform"
+                            className="cursor-pointer group/closebtn"
+                            onMouseDown={(e) => e.stopPropagation()}
                             onClick={(e) => {
                               e.stopPropagation();
                               onRemoveModule(mod.id);
                             }}
                           >
-                            <circle cx="9.5" cy="9.5" r="8.5" fill="#7F1D1D" stroke="#EF4444" strokeWidth="1.2" filter="url(#glowDrop)" />
-                            <text x="9.5" y="13" textAnchor="middle" fill="#FFFFFF" fontSize="9.5" fontWeight="bold">✕</text>
+                            {/* Generous 23x23 hit box prevents cursor edge slipping */}
+                            <rect x="-2" y="-2" width="23" height="23" fill="transparent" />
+                            <circle
+                              cx="9.5"
+                              cy="9.5"
+                              r="8.5"
+                              fill="#7F1D1D"
+                              stroke="#EF4444"
+                              strokeWidth="1.2"
+                              filter="url(#glowDrop)"
+                              className="group-hover/closebtn:fill-[#DC2626] group-hover/closebtn:stroke-white transition-colors"
+                            />
+                            <text
+                              x="9.5"
+                              y="13"
+                              textAnchor="middle"
+                              fill="#FFFFFF"
+                              fontSize="9.5"
+                              fontWeight="bold"
+                              className="pointer-events-none select-none"
+                            >
+                              ✕
+                            </text>
                           </g>
                         )}
                       </g>

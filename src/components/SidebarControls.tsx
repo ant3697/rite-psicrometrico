@@ -6,6 +6,7 @@ import {
   ChartLayerVisibility,
   UnitSystem,
   PsychroInputs,
+  IsolatedProcessInfo,
 } from '../types/psychrometrics';
 import {
   UnitConvert,
@@ -23,6 +24,7 @@ import {
   Shuffle,
   ChevronDown,
   ChevronUp,
+  Target,
 } from 'lucide-react';
 
 interface SidebarControlsProps {
@@ -39,6 +41,8 @@ interface SidebarControlsProps {
   units: UnitSystem;
   layers: ChartLayerVisibility;
   onToggleLayer: (layerKey: keyof ChartLayerVisibility) => void;
+  isolatedProcessInfo?: IsolatedProcessInfo | null;
+  onSetIsolatedProcessInfo?: (info: IsolatedProcessInfo | null) => void;
 }
 
 export const SidebarControls: React.FC<SidebarControlsProps> = ({
@@ -55,6 +59,8 @@ export const SidebarControls: React.FC<SidebarControlsProps> = ({
   units,
   layers,
   onToggleLayer,
+  isolatedProcessInfo,
+  onSetIsolatedProcessInfo,
 }) => {
   const [activeTab, setActiveTab] = useState<'points' | 'processes' | 'layers'>('points');
 
@@ -244,14 +250,26 @@ export const SidebarControls: React.FC<SidebarControlsProps> = ({
               </div>
 
               {/* Interactive Sliders / Inputs based on mode */}
-              <div className="space-y-3 bg-[#0a0a0c]/60 p-3 rounded-[8px] border border-[rgba(255,255,255,0.1)]">
+              <div className="space-y-2.5 bg-[#0a0a0c]/60 p-2.5 rounded-[8px] border border-[rgba(255,255,255,0.1)]">
                 {/* Dry-Bulb Input */}
                 <div className="space-y-1">
-                  <div className="flex justify-between text-xs">
-                    <span className="text-[#94a3b8]">T. Bulbo Seco (Tbs)</span>
-                    <span className="font-mono text-[#fbbf24] font-bold">
-                      {selectedPoint.tdb.toFixed(1)} °C
-                    </span>
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-[#94a3b8] font-medium">T. Bulbo Seco (Tbs)</span>
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        min="-10"
+                        max="50"
+                        step="0.5"
+                        value={selectedPoint.tdb}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value);
+                          if (!isNaN(val)) handleUpdateParameter('tdb', val);
+                        }}
+                        className="w-16 h-5 px-1 py-0 text-right font-mono text-[11px] font-bold rounded bg-slate-950 border border-slate-700 text-[#fbbf24] focus:outline-none focus:border-[#fbbf24]"
+                      />
+                      <span className="text-[10px] text-slate-500 font-mono">°C</span>
+                    </div>
                   </div>
                   <input
                     type="range"
@@ -267,11 +285,23 @@ export const SidebarControls: React.FC<SidebarControlsProps> = ({
                 {/* Secondary input based on mode */}
                 {inputMode === 'tdb_rh' && (
                   <div className="space-y-1">
-                    <div className="flex justify-between text-xs">
-                      <span className="text-[#94a3b8]">Humedad Relativa (HR)</span>
-                      <span className="font-mono text-[#a3e635] font-bold">
-                        {selectedPoint.rh.toFixed(1)} %
-                      </span>
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-[#94a3b8] font-medium">Humedad Relativa (HR)</span>
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="number"
+                          min="5"
+                          max="100"
+                          step="1"
+                          value={selectedPoint.rh}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value);
+                            if (!isNaN(val)) handleUpdateParameter('rh', val);
+                          }}
+                          className="w-16 h-5 px-1 py-0 text-right font-mono text-[11px] font-bold rounded bg-slate-950 border border-slate-700 text-[#a3e635] focus:outline-none focus:border-[#a3e635]"
+                        />
+                        <span className="text-[10px] text-slate-500 font-mono">%</span>
+                      </div>
                     </div>
                     <input
                       type="range"
@@ -287,11 +317,23 @@ export const SidebarControls: React.FC<SidebarControlsProps> = ({
 
                 {inputMode === 'tdb_twb' && (
                   <div className="space-y-1">
-                    <div className="flex justify-between text-xs">
-                      <span className="text-[#94a3b8]">T. Bulbo Húmedo (Tbh)</span>
-                      <span className="font-mono text-[#93c5fd] font-bold">
-                        {selectedPoint.twb.toFixed(1)} °C
-                      </span>
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-[#94a3b8] font-medium">T. Bulbo Húmedo (Tbh)</span>
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="number"
+                          min="-10"
+                          max={selectedPoint.tdb}
+                          step="0.5"
+                          value={selectedPoint.twb}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value);
+                            if (!isNaN(val)) handleUpdateParameter('twb', val);
+                          }}
+                          className="w-16 h-5 px-1 py-0 text-right font-mono text-[11px] font-bold rounded bg-slate-950 border border-slate-700 text-[#93c5fd] focus:outline-none focus:border-[#93c5fd]"
+                        />
+                        <span className="text-[10px] text-slate-500 font-mono">°C</span>
+                      </div>
                     </div>
                     <input
                       type="range"
@@ -307,11 +349,23 @@ export const SidebarControls: React.FC<SidebarControlsProps> = ({
 
                 {inputMode === 'tdb_tdp' && (
                   <div className="space-y-1">
-                    <div className="flex justify-between text-xs">
-                      <span className="text-[#94a3b8]">T. Punto Rocío (Tpr)</span>
-                      <span className="font-mono text-[#c084fc] font-bold">
-                        {selectedPoint.tdp.toFixed(1)} °C
-                      </span>
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-[#94a3b8] font-medium">T. Punto Rocío (Tpr)</span>
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="number"
+                          min="-20"
+                          max={selectedPoint.tdb}
+                          step="0.5"
+                          value={selectedPoint.tdp}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value);
+                            if (!isNaN(val)) handleUpdateParameter('tdp', val);
+                          }}
+                          className="w-16 h-5 px-1 py-0 text-right font-mono text-[11px] font-bold rounded bg-slate-950 border border-slate-700 text-[#c084fc] focus:outline-none focus:border-[#c084fc]"
+                        />
+                        <span className="text-[10px] text-slate-500 font-mono">°C</span>
+                      </div>
                     </div>
                     <input
                       type="range"
@@ -327,11 +381,23 @@ export const SidebarControls: React.FC<SidebarControlsProps> = ({
 
                 {inputMode === 'tdb_w' && (
                   <div className="space-y-1">
-                    <div className="flex justify-between text-xs">
-                      <span className="text-slate-400">Humedad Específica (W)</span>
-                      <span className="font-mono text-amber-400 font-bold">
-                        {(selectedPoint.w * 1000).toFixed(2)} g/kg
-                      </span>
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-slate-400 font-medium">Humedad Específica (W)</span>
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="number"
+                          min="0.5"
+                          max="30"
+                          step="0.2"
+                          value={parseFloat((selectedPoint.w * 1000).toFixed(2))}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value);
+                            if (!isNaN(val)) handleUpdateParameter('w', val / 1000);
+                          }}
+                          className="w-16 h-5 px-1 py-0 text-right font-mono text-[11px] font-bold rounded bg-slate-950 border border-slate-700 text-amber-400 focus:outline-none focus:border-amber-400"
+                        />
+                        <span className="text-[10px] text-slate-500 font-mono">g/kg</span>
+                      </div>
                     </div>
                     <input
                       type="range"
@@ -378,33 +444,33 @@ export const SidebarControls: React.FC<SidebarControlsProps> = ({
               </div>
 
               {/* Readout of all 8 calculated psychrometric variables */}
-              <div className="space-y-2">
-                <span className="text-[11px] uppercase font-semibold tracking-wider text-slate-400">
+              <div className="space-y-1.5">
+                <span className="text-[10px] uppercase font-semibold tracking-wider text-slate-400">
                   Propiedades del Estado
                 </span>
-                <div className="grid grid-cols-2 gap-2 text-xs font-mono tabular-nums">
-                  <div className="bg-slate-950 p-2 rounded border border-slate-800">
-                    <div className="text-[10px] text-slate-400">Entalpía (h)</div>
-                    <div className="font-bold text-rose-300">
-                      {selectedPoint.h.toFixed(1)} kJ/kg
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-xs font-mono tabular-nums">
+                  <div className="bg-slate-950/80 p-1.5 rounded border border-slate-800 text-center">
+                    <div className="text-[9px] text-slate-400">Entalpía (h)</div>
+                    <div className="font-bold text-rose-300 text-[11px]">
+                      {selectedPoint.h.toFixed(1)} <span className="text-[8px] font-normal text-slate-500">kJ/kg</span>
                     </div>
                   </div>
-                  <div className="bg-slate-950 p-2 rounded border border-slate-800">
-                    <div className="text-[10px] text-slate-400">Volumen Esp. (v)</div>
-                    <div className="font-bold text-sky-300">
-                      {selectedPoint.v.toFixed(3)} m³/kg
+                  <div className="bg-slate-950/80 p-1.5 rounded border border-slate-800 text-center">
+                    <div className="text-[9px] text-slate-400">Volumen (v)</div>
+                    <div className="font-bold text-sky-300 text-[11px]">
+                      {selectedPoint.v.toFixed(3)} <span className="text-[8px] font-normal text-slate-500">m³/kg</span>
                     </div>
                   </div>
-                  <div className="bg-slate-950 p-2 rounded border border-slate-800">
-                    <div className="text-[10px] text-slate-400">Densidad (ρ)</div>
-                    <div className="font-bold text-emerald-300">
-                      {selectedPoint.rho.toFixed(3)} kg/m³
+                  <div className="bg-slate-950/80 p-1.5 rounded border border-slate-800 text-center">
+                    <div className="text-[9px] text-slate-400">Densidad (ρ)</div>
+                    <div className="font-bold text-emerald-300 text-[11px]">
+                      {selectedPoint.rho.toFixed(2)} <span className="text-[8px] font-normal text-slate-500">kg/m³</span>
                     </div>
                   </div>
-                  <div className="bg-slate-950 p-2 rounded border border-slate-800">
-                    <div className="text-[10px] text-slate-400">Presión Vapor (Pv)</div>
-                    <div className="font-bold text-amber-300">
-                      {selectedPoint.pv.toFixed(3)} kPa
+                  <div className="bg-slate-950/80 p-1.5 rounded border border-slate-800 text-center">
+                    <div className="text-[9px] text-slate-400">Pres. Vapor (Pv)</div>
+                    <div className="font-bold text-amber-300 text-[11px]">
+                      {selectedPoint.pv.toFixed(2)} <span className="text-[8px] font-normal text-slate-500">kPa</span>
                     </div>
                   </div>
                 </div>
@@ -509,12 +575,51 @@ export const SidebarControls: React.FC<SidebarControlsProps> = ({
                         />
                         <span className="truncate">{ptTo.name}</span>
                       </div>
-                      <button
-                        onClick={() => onDeleteProcess(proc.id)}
-                        className="text-[#94a3b8] hover:text-[#ef4444] transition-colors"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => {
+                            if (!onSetIsolatedProcessInfo) return;
+                            const isIso =
+                              isolatedProcessInfo?.processId === proc.id ||
+                              isolatedProcessInfo?.process?.id === proc.id;
+                            if (isIso) {
+                              onSetIsolatedProcessInfo(null);
+                            } else {
+                              onSetIsolatedProcessInfo({
+                                processId: proc.id,
+                                moduleName: proc.name,
+                                moduleType: proc.type,
+                                isPassive: false,
+                                entryPoint: ptFrom,
+                                exitPoint: ptTo,
+                                process: proc,
+                                onClearIsolation: () => onSetIsolatedProcessInfo(null),
+                              });
+                            }
+                          }}
+                          className={`p-1 rounded transition-colors ${
+                            isolatedProcessInfo?.processId === proc.id ||
+                            isolatedProcessInfo?.process?.id === proc.id
+                              ? 'text-cyan-300 bg-cyan-950/80 border border-cyan-500/50'
+                              : 'text-[#94a3b8] hover:text-cyan-400 hover:bg-white/5'
+                          }`}
+                          title={
+                            isolatedProcessInfo?.processId === proc.id ||
+                            isolatedProcessInfo?.process?.id === proc.id
+                              ? 'Quitar aislamiento (Ver ciclo completo)'
+                              : 'Aislar esta transformación en la carta psicrométrica'
+                          }
+                        >
+                          <Target className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => onDeleteProcess(proc.id)}
+                          className="text-[#94a3b8] hover:text-[#ef4444] transition-colors p-1 rounded hover:bg-white/5"
+                          title="Eliminar transformación"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
 
                     <div className="text-[11px] text-[#fbbf24] font-semibold">

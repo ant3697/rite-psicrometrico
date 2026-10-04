@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useRef, useMemo, useCallback, useEffect } from 'react';
 import {
   StatePoint,
   ProcessConnection,
@@ -51,6 +51,7 @@ import {
   Eye,
   EyeOff,
 } from 'lucide-react';
+import { ChartContextMenu, ContextMenuTarget } from './ChartContextMenu';
 
 interface PsychrometricChartProps {
   points: StatePoint[];
@@ -64,6 +65,12 @@ interface PsychrometricChartProps {
   units: UnitSystem;
   layers: ChartLayerVisibility;
   isolatedProcessInfo?: IsolatedProcessInfo | null;
+  onSetIsolatedProcessInfo?: (info: IsolatedProcessInfo | null) => void;
+  onDeletePoint?: (id: string) => void;
+  onDeleteProcess?: (id: string) => void;
+  onDuplicatePoint?: (id: string) => void;
+  onLocateModuleInAhu?: (moduleIdOrPointId: string) => void;
+  isSplitView?: boolean;
 }
 
 // Geometric helpers for anti-collision label layout
@@ -162,6 +169,12 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
   units,
   layers,
   isolatedProcessInfo,
+  onSetIsolatedProcessInfo,
+  onDeletePoint,
+  onDeleteProcess,
+  onDuplicatePoint,
+  onLocateModuleInAhu,
+  isSplitView = false,
 }) => {
   const svgRef = useRef<SVGSVGElement | null>(null);
 
@@ -171,6 +184,9 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
 
   // Toggle to dim rather than completely hide non-isolated cycle points/processes
   const [dimOtherProcesses, setDimOtherProcesses] = useState<boolean>(false);
+
+  // Context Menu State (for right-click on points, processes, or canvas)
+  const [contextMenu, setContextMenu] = useState<ContextMenuTarget | null>(null);
 
   // Check if a point belongs to the isolated module process
   const isPointIsolated = useCallback(
@@ -193,6 +209,9 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
     (proc: ProcessConnection) => {
       if (!isolatedProcessInfo) return true;
       if (isolatedProcessInfo.isPassive) return false;
+      if (isolatedProcessInfo.processId && proc.id === isolatedProcessInfo.processId) {
+        return true;
+      }
       if (isolatedProcessInfo.process) {
         return proc.id === isolatedProcessInfo.process.id;
       }
@@ -203,6 +222,36 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
     },
     [isolatedProcessInfo]
   );
+
+  // Center diagram on a single state point with focused zoom
+  const handleCenterPoint = useCallback((tdb: number, w: number) => {
+    const spanT = 24;
+    const spanW = 0.012;
+    setBounds({
+      tdbMin: Number((tdb - spanT / 2).toFixed(2)),
+      tdbMax: Number((tdb + spanT / 2).toFixed(2)),
+      wMin: Number(Math.max(0, w - spanW / 2).toFixed(5)),
+      wMax: Number((w + spanW / 2).toFixed(5)),
+    });
+  }, []);
+
+  // Center diagram on a process connection between two points
+  const handleCenterProcess = useCallback((p1: StatePoint, p2: StatePoint) => {
+    const midT = (p1.tdb + p2.tdb) / 2;
+    const midW = (p1.w + p2.w) / 2;
+    const deltaT = Math.abs(p2.tdb - p1.tdb);
+    const deltaW = Math.abs(p2.w - p1.w);
+
+    const spanT = Math.max(16, deltaT * 2.2);
+    const spanW = Math.max(0.008, deltaW * 2.2);
+
+    setBounds({
+      tdbMin: Number((midT - spanT / 2).toFixed(2)),
+      tdbMax: Number((midT + spanT / 2).toFixed(2)),
+      wMin: Number(Math.max(0, midW - spanW / 2).toFixed(5)),
+      wMax: Number((midW + spanW / 2).toFixed(5)),
+    });
+  }, []);
 
   // Official Chart Theme: 'ashrae_classic' (Canonical Green on technical paper), 'valcon_color' (Polychrome), or 'dark_blueprint' (CAD)
   const [chartTheme, setChartTheme] = useState<'ashrae_classic' | 'valcon_color' | 'dark_blueprint'>('ashrae_classic');
@@ -428,33 +477,44 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
     [viewBoxWidth, viewBoxHeight]
   );
 
-  // Wheel zoom centered on cursor
-  const handleWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    if (!svgRef.current) return;
-    const { x: rawPx, y: rawPy } = getSvgCursorPoint(e);
+  // Non-passive wheel zoom listener attached directly to SVG canvas
+  // This completely eliminates browser passive intervention errors and stops page scroll in all views
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
 
-    const normX = Math.max(0, Math.min(1, (rawPx - margin.left) / plotWidth));
-    const normY = Math.max(0, Math.min(1, (margin.top + plotHeight - rawPy) / plotHeight));
+    const onWheelNative = (e: WheelEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
 
-    const factor = e.deltaY < 0 ? 0.88 : 1.14;
+      const { x: rawPx, y: rawPy } = getSvgCursorPoint(e);
+      const normX = Math.max(0, Math.min(1, (rawPx - margin.left) / plotWidth));
+      const normY = Math.max(0, Math.min(1, (margin.top + plotHeight - rawPy) / plotHeight));
 
-    const spanT = bounds.tdbMax - bounds.tdbMin;
-    const spanW = bounds.wMax - bounds.wMin;
+      const factor = e.deltaY < 0 ? 0.88 : 1.14;
 
-    const newSpanT = Math.min(90, Math.max(6, spanT * factor));
-    const newSpanW = Math.min(0.05, Math.max(0.002, spanW * factor));
+      const spanT = bounds.tdbMax - bounds.tdbMin;
+      const spanW = bounds.wMax - bounds.wMin;
 
-    const cursorT = bounds.tdbMin + normX * spanT;
-    const cursorW = bounds.wMin + normY * spanW;
+      const newSpanT = Math.min(90, Math.max(6, spanT * factor));
+      const newSpanW = Math.min(0.05, Math.max(0.002, spanW * factor));
 
-    setBounds({
-      tdbMin: Number((cursorT - normX * newSpanT).toFixed(2)),
-      tdbMax: Number((cursorT + (1 - normX) * newSpanT).toFixed(2)),
-      wMin: Number(Math.max(0, cursorW - normY * newSpanW).toFixed(5)),
-      wMax: Number((cursorW + (1 - normY) * newSpanW).toFixed(5)),
-    });
-  };
+      const cursorT = bounds.tdbMin + normX * spanT;
+      const cursorW = bounds.wMin + normY * spanW;
+
+      setBounds({
+        tdbMin: Number((cursorT - normX * newSpanT).toFixed(2)),
+        tdbMax: Number((cursorT + (1 - normX) * newSpanT).toFixed(2)),
+        wMin: Number(Math.max(0, cursorW - normY * newSpanW).toFixed(5)),
+        wMax: Number((cursorW + (1 - normY) * newSpanW).toFixed(5)),
+      });
+    };
+
+    svg.addEventListener('wheel', onWheelNative, { passive: false });
+    return () => {
+      svg.removeEventListener('wheel', onWheelNative);
+    };
+  }, [bounds, margin, plotWidth, plotHeight, getSvgCursorPoint]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
     if (draggedPointId) return;
@@ -649,6 +709,16 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
     if (e.detail === 2) {
       if (hoverCoords) {
         onAddPointAtCoordinates(hoverCoords.tdb, hoverCoords.w);
+      }
+    } else {
+      // If clicking directly on empty diagram background, deselect point
+      const target = e.target as HTMLElement;
+      if (
+        target.tagName === 'svg' ||
+        target.classList.contains('plot-bg-rect') ||
+        target.getAttribute('fill') === themeStyles.plotBg
+      ) {
+        onSelectPoint(null);
       }
     }
   };
@@ -1405,7 +1475,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
           title="Transportador de Factor de Calor Sensible (SHR / Sensible Heat Ratio)"
         >
           <Compass className="w-3.5 h-3.5" />
-          <span className="hidden xl:inline">Transportador SHR</span>
+          <span className={isSplitView ? 'hidden' : 'hidden xl:inline'}>Transportador SHR</span>
         </button>
 
         {/* Active SHR Indicator */}
@@ -1433,7 +1503,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
           title="Curvas de Desviación de Entalpía (Enthalpy Deviation Curves)"
         >
           <Activity className="w-3.5 h-3.5" />
-          <span className="hidden xl:inline">Desv. Δh</span>
+          <span className={isSplitView ? 'hidden' : 'hidden xl:inline'}>Desv. Δh</span>
         </button>
 
         <div className="h-4 w-[1px] bg-slate-700 mx-0.5" />
@@ -1465,7 +1535,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
           title="Ajustar el diagrama al ciclo activo de puntos"
         >
           <Maximize2 className="w-3 h-3 text-amber-400" />
-          <span>Ajustar Todo</span>
+          <span className={isSplitView ? 'hidden sm:inline' : 'inline'}>Ajustar</span>
         </button>
 
         {/* Center Cycle */}
@@ -1475,7 +1545,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
           title="Centrar el ciclo en la ventana"
         >
           <Crosshair className="w-3 h-3 text-cyan-400" />
-          <span>Centrar</span>
+          <span className={isSplitView ? 'hidden sm:inline' : 'inline'}>Centrar</span>
         </button>
 
         {/* Reset 1:1 Default */}
@@ -1490,7 +1560,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
 
       {/* Floating Thermodynamic Inspector HUD (under cursor) */}
       {hoverCoords && (
-        <div className="absolute top-2 right-3 z-20 bg-slate-900/95 backdrop-blur-md px-3.5 py-1.5 rounded-xl border border-cyan-500/40 text-xs shadow-2xl pointer-events-none">
+        <div className={`absolute ${isSplitView ? 'bottom-8 right-3' : 'top-2 right-3'} z-20 bg-slate-900/95 backdrop-blur-md px-3.5 py-1.5 rounded-xl border border-cyan-500/40 text-xs shadow-2xl pointer-events-none transition-all`}>
           <div className="flex items-center gap-3 font-mono text-[11px] tabular-nums">
             <div>
               <span className="text-slate-400">Tbs: </span>
@@ -1548,9 +1618,9 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
         </div>
       )}
 
-      {/* Floating Isolated Process HUD Banner */}
-      {isolatedProcessInfo && (
-        <div className="absolute top-11 left-3 right-3 z-30 flex flex-wrap items-center justify-between gap-2 bg-slate-950/95 border border-cyan-500/50 rounded-xl px-3 py-1.5 shadow-2xl backdrop-blur-md text-xs font-mono animate-in fade-in duration-200">
+      {/* Floating Isolated Process HUD Banner: Only in single-chart view, never in splitView where it is placed outside the canvas */}
+      {!isSplitView && isolatedProcessInfo && (
+        <div className="absolute top-11 right-3 max-w-xl z-30 flex flex-wrap items-center justify-between gap-2 bg-slate-950/95 border border-cyan-500/50 rounded-xl px-3 py-1.5 shadow-2xl backdrop-blur-md text-xs font-mono animate-in fade-in duration-200">
           <div className="flex items-center gap-2 flex-wrap">
             <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-cyan-950/80 border border-cyan-500/50 text-cyan-300 font-bold">
               <Target className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
@@ -1559,7 +1629,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
 
             {isolatedProcessInfo.isPassive ? (
               <span className="text-amber-300 text-[11px] bg-amber-950/50 border border-amber-800/40 px-2 py-0.5 rounded">
-                Módulo Pasivo: Sin transformación psicrométrica (ΔT = 0, Δw = 0, Δh = 0) · Pérdida de carga ΔP: {isolatedProcessInfo.pressureDropPa ?? 0} Pa
+                Módulo Pasivo (Isentálpico: ΔT=0, Δw=0) · ΔP: {isolatedProcessInfo.pressureDropPa ?? 0} Pa
               </span>
             ) : (
               <div className="flex items-center gap-2 text-[11px] text-slate-300 flex-wrap">
@@ -1619,7 +1689,6 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
         viewBox={`0 0 ${viewBoxWidth} ${viewBoxHeight}`}
         className={`w-full h-full touch-none select-none ${isPanning ? 'cursor-grabbing' : 'cursor-crosshair'}`}
         preserveAspectRatio="xMidYMid meet"
-        onWheel={handleWheel}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
@@ -1629,6 +1698,19 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
         onTouchCancel={handleTouchEnd}
         onClick={handleSvgClick}
         onDoubleClick={handleZoomAll}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setContextMenu({
+            type: 'canvas',
+            clientX: e.clientX,
+            clientY: e.clientY,
+            tdb: hoverCoords?.tdb,
+            w: hoverCoords?.w,
+            rh: hoverCoords?.rh,
+            h: hoverCoords?.h,
+            twb: hoverCoords?.twb,
+          });
+        }}
         style={{ touchAction: 'none' }}
       >
         <defs>
@@ -1906,7 +1988,31 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
                 const lineWidth = isIsolated && isolatedProcessInfo ? '5' : '3.5';
 
                 return (
-                  <g key={proc.id} opacity={lineOpacity}>
+                  <g
+                    key={proc.id}
+                    opacity={lineOpacity}
+                    className="cursor-pointer group"
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setContextMenu({
+                        type: 'process',
+                        clientX: e.clientX,
+                        clientY: e.clientY,
+                        processId: proc.id,
+                      });
+                    }}
+                  >
+                    {/* Wide Invisible Hit-Area for effortless clicking and right-clicking */}
+                    <line
+                      x1={x1}
+                      y1={y1}
+                      x2={x2}
+                      y2={y2}
+                      stroke="transparent"
+                      strokeWidth="18"
+                    />
+
                     {/* Process Line */}
                     <line
                       x1={x1}
@@ -1936,7 +2042,39 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
 
                     {/* Anti-Collision Process Power Badge (Never overlaps lines or points) */}
                     {placedBadge && (
-                      <g transform={`translate(${placedBadge.cx}, ${placedBadge.cy})`}>
+                      <g
+                        transform={`translate(${placedBadge.cx}, ${placedBadge.cy})`}
+                        className="cursor-pointer transition-transform hover:scale-105"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (onSetIsolatedProcessInfo) {
+                            if (isIsolated) {
+                              onSetIsolatedProcessInfo(null);
+                            } else {
+                              onSetIsolatedProcessInfo({
+                                processId: proc.id,
+                                moduleName: proc.name,
+                                moduleType: proc.type,
+                                isPassive: false,
+                                entryPoint: ptFrom,
+                                exitPoint: ptTo,
+                                process: proc,
+                                onClearIsolation: () => onSetIsolatedProcessInfo(null),
+                              });
+                            }
+                          }
+                        }}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setContextMenu({
+                            type: 'process',
+                            clientX: e.clientX,
+                            clientY: e.clientY,
+                            processId: proc.id,
+                          });
+                        }}
+                      >
                         <rect
                           x={-placedBadge.width / 2}
                           y={-placedBadge.height / 2}
@@ -2072,54 +2210,56 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
           {isolatedProcessInfo && isolatedProcessInfo.isPassive && (() => {
             const entry = isolatedProcessInfo.entryPoint;
             const [px, py] = coordToPixel(entry.tdb, entry.w);
+            const cardW = 210;
+            const cardH = 38;
+            const cardX = px + 16 + cardW > viewBoxWidth - margin.right ? -cardW - 16 : 16;
+            const cardY = py - 40 < margin.top ? 12 : -40;
 
             return (
-              <g className="isolated-passive-indicator pointer-events-none">
+              <g className="isolated-passive-indicator pointer-events-none" transform={`translate(${px}, ${py})`}>
                 <circle
-                  cx={px}
-                  cy={py}
-                  r="22"
+                  r="18"
                   fill="none"
                   stroke="#F59E0B"
-                  strokeWidth="2.5"
-                  strokeDasharray="5,3"
-                  className="animate-spin"
-                  style={{ animationDuration: '8s' }}
+                  strokeWidth="2"
+                  strokeDasharray="4,3"
+                  className="animate-pulse"
                 />
-                <circle cx={px} cy={py} r="13" fill="#F59E0B" fillOpacity="0.2" stroke="#F59E0B" strokeWidth="2" />
+                <circle r="11" fill="#F59E0B" fillOpacity="0.15" stroke="#F59E0B" strokeWidth="1.5" />
+                <circle r="3" fill="#F59E0B" />
 
                 {/* Informative Callout Card */}
-                <g transform={`translate(${px + 18}, ${py - 44})`}>
+                <g transform={`translate(${cardX}, ${cardY})`}>
                   <rect
                     x="0"
                     y="0"
-                    width="240"
-                    height="42"
-                    rx="6"
+                    width={cardW}
+                    height={cardH}
+                    rx="5"
                     fill={themeStyles.plotBg}
                     stroke="#F59E0B"
-                    strokeWidth="1.5"
+                    strokeWidth="1.2"
                     opacity="0.95"
-                    filter={themeStyles.isDark ? 'drop-shadow(0 2px 8px rgba(0,0,0,0.7))' : 'drop-shadow(0 1px 4px rgba(0,0,0,0.2))'}
+                    filter={themeStyles.isDark ? 'drop-shadow(0 2px 6px rgba(0,0,0,0.6))' : 'drop-shadow(0 1px 3px rgba(0,0,0,0.2))'}
                   />
                   <text
-                    x="10"
-                    y="16"
+                    x="8"
+                    y="15"
                     fill="#F59E0B"
-                    fontSize="10"
+                    fontSize="9.5"
                     fontWeight="bold"
                     fontFamily="Plus Jakarta Sans, sans-serif"
                   >
                     {isolatedProcessInfo.moduleName} (Isentálpico)
                   </text>
                   <text
-                    x="10"
-                    y="31"
+                    x="8"
+                    y="28"
                     fill={themeStyles.axisText}
-                    fontSize="9"
+                    fontSize="8.5"
                     fontFamily="JetBrains Mono"
                   >
-                    ΔT = 0,0 °C · Δw = 0,0 g/kg · ΔP = {isolatedProcessInfo.pressureDropPa ?? 0} Pa
+                    ΔT = 0 °C · Δw = 0 g/kg · ΔP = {isolatedProcessInfo.pressureDropPa ?? 0} Pa
                   </text>
                 </g>
               </g>
@@ -2153,16 +2293,30 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
                     setDraggedPointId(pt.id);
                     onSelectPoint(pt.id);
                   }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onSelectPoint(pt.id);
+                    setContextMenu({
+                      type: 'point',
+                      clientX: e.clientX,
+                      clientY: e.clientY,
+                      pointId: pt.id,
+                      tdb: pt.tdb,
+                      w: pt.w,
+                      rh: pt.rh,
+                      h: pt.h,
+                    });
+                  }}
                 >
                   {isSelected && (
                     <circle
-                      r="14"
+                      r="13"
                       fill="none"
                       stroke={pt.color}
                       strokeWidth="2"
                       strokeDasharray="3,3"
-                      className="animate-spin"
-                      style={{ animationDuration: '6s' }}
+                      className="animate-pulse"
                     />
                   )}
                   <circle
@@ -2196,6 +2350,21 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
                     onClick={(e) => {
                       e.stopPropagation();
                       onSelectPoint(pt.id);
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onSelectPoint(pt.id);
+                      setContextMenu({
+                        type: 'point',
+                        clientX: e.clientX,
+                        clientY: e.clientY,
+                        pointId: pt.id,
+                        tdb: pt.tdb,
+                        w: pt.w,
+                        rh: pt.rh,
+                        h: pt.h,
+                      });
                     }}
                   >
                     {/* Leader Line linking Point Circle to Label Badge */}
@@ -2679,11 +2848,42 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
         </g>
       </svg>
 
-      {/* Bottom Panning Hint */}
+      {/* Bottom Panning and Context Menu Hint */}
       <div className="absolute bottom-2 left-4 z-10 hidden sm:flex items-center gap-1.5 text-[10px] text-slate-500 font-mono pointer-events-none">
         <Move className="w-3 h-3 text-cyan-400" />
-        <span>Arrastra para mover diagrama · Rueda para zoom · Doble clic para ajustar todo</span>
+        <span>Arrastra para mover · Rueda para zoom · Clic dcho. en puntos/procesos para menú contextual</span>
       </div>
+
+      {/* Context Menu (Right-click on Points, Processes, or Canvas) */}
+      {contextMenu && (
+        <ChartContextMenu
+          menu={contextMenu}
+          onClose={() => setContextMenu(null)}
+          points={points}
+          processes={processes}
+          selectedPointId={selectedPointId}
+          onSelectPoint={onSelectPoint}
+          onCenterPoint={handleCenterPoint}
+          onCenterProcess={handleCenterProcess}
+          onZoomAll={handleZoomAll}
+          onCenterCycle={handleCenterCycle}
+          onResetBounds={handleResetBounds}
+          onAddPointAtCoordinates={onAddPointAtCoordinates}
+          onDeletePoint={onDeletePoint}
+          onDeleteProcess={onDeleteProcess}
+          onDuplicatePoint={onDuplicatePoint}
+          isolatedProcessInfo={isolatedProcessInfo}
+          onSetIsolatedProcessInfo={onSetIsolatedProcessInfo}
+          dimOtherProcesses={dimOtherProcesses}
+          onToggleDimOtherProcesses={() => setDimOtherProcesses(!dimOtherProcesses)}
+          showProtractor={showProtractor}
+          onToggleProtractor={() => setShowProtractor(!showProtractor)}
+          showEnthalpyDeviations={showEnthalpyDeviations}
+          onToggleEnthalpyDeviations={() => setShowEnthalpyDeviations(!showEnthalpyDeviations)}
+          onLocateModuleInAhu={onLocateModuleInAhu}
+          isSplitView={isSplitView}
+        />
+      )}
     </div>
   );
 };

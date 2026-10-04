@@ -386,6 +386,8 @@ export default function App() {
             units={units}
             layers={layers}
             onToggleLayer={handleToggleLayer}
+            isolatedProcessInfo={isolatedProcessInfo}
+            onSetIsolatedProcessInfo={setIsolatedProcessInfo}
           />
         </div>
 
@@ -404,6 +406,24 @@ export default function App() {
               units={units}
               layers={layers}
               isolatedProcessInfo={isolatedProcessInfo}
+              onSetIsolatedProcessInfo={setIsolatedProcessInfo}
+              onDeletePoint={handleDeletePoint}
+              onDeleteProcess={handleDeleteProcess}
+              onDuplicatePoint={(id) => {
+                const src = points.find((p) => p.id === id);
+                if (!src) return;
+                const newPt = solveStatePoint({ mode: 'tdb_w', tdb: src.tdb + 1, w: src.w }, atmosphere.pressure, {
+                  name: `${src.name} (Copia)`,
+                  color: src.color,
+                  massFlow: src.massFlow,
+                });
+                setPoints((prev) => [...prev, newPt]);
+              }}
+              onLocateModuleInAhu={(id) => {
+                setCurrentView('schematic');
+                setSelectedPointId(id);
+              }}
+              isSplitView={false}
             />
           )}
 
@@ -518,6 +538,8 @@ export default function App() {
                   units={units}
                   layers={layers}
                   onToggleLayer={handleToggleLayer}
+                  isolatedProcessInfo={isolatedProcessInfo}
+                  onSetIsolatedProcessInfo={setIsolatedProcessInfo}
                 />
               </div>
             </div>

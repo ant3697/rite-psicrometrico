@@ -165,10 +165,11 @@ export interface PresetCycle {
 }
 
 export interface IsolatedProcessInfo {
-  moduleId: string;
-  moduleName: string;
-  moduleType: AHUModuleType | string;
-  isPassive: boolean;
+  processId?: string;
+  moduleId?: string;
+  moduleName?: string;
+  moduleType?: AHUModuleType | ProcessType | string;
+  isPassive?: boolean;
   entryPoint: StatePoint;
   exitPoint: StatePoint;
   secondaryEntryPoint?: StatePoint;
