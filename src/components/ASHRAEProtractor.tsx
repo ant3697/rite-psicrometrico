@@ -2,9 +2,11 @@ import React, { useState } from 'react';
 import {
   ASHRAE_SHR_VALUES,
   getProtractorAngle,
+  getSlopeFromSHR,
   getAshraeReferencePoint,
   calculateADP,
 } from '../utils/ashraeScales';
+import { UnitConvert } from '../utils/psychrolib';
 
 interface ASHRAEProtractorProps {
   x0: number; // Origin X in SVG canvas
@@ -16,6 +18,7 @@ interface ASHRAEProtractorProps {
   spanW: number;
   pressure: number;
   theme: 'ashrae_classic' | 'valcon_color' | 'dark_blueprint';
+  units?: 'SI' | 'IP';
   activeSHR?: number | null;
   onSelectSHR?: (shr: number | null) => void;
   coordToPixel: (tdb: number, w: number) => [number, number];
@@ -32,6 +35,7 @@ export const ASHRAEProtractor: React.FC<ASHRAEProtractorProps> = ({
   spanW,
   pressure,
   theme,
+  units = 'SI',
   activeSHR,
   onSelectSHR,
   coordToPixel,
@@ -323,17 +327,37 @@ export const ASHRAEProtractor: React.FC<ASHRAEProtractorProps> = ({
             const angle = getProtractorAngle(currentActiveSHR, plotWidth, plotHeight, spanT, spanW);
             const cosA = Math.cos(angle);
             const sinA = Math.sin(angle);
-            const lineLen = 380;
+            const dWdT = getSlopeFromSHR(currentActiveSHR);
+
+            // Precise thermodynamic line endpoints
+            let startPx = targetX;
+            let startPy = targetY;
+            if (adpPixel) {
+              // Line starts right at the Apparatus Dew Point on the saturation curve
+              startPx = adpPixel[0];
+              startPy = adpPixel[1];
+            } else {
+              const tLow = Math.max(-10, targetPt.tdb - 18);
+              const wLow = Math.max(0, targetPt.w - dWdT * (targetPt.tdb - tLow));
+              const [sx, sy] = coordToPixel(tLow, wLow);
+              startPx = sx;
+              startPy = sy;
+            }
+
+            // Line extends into the room zone (warmer Tdb)
+            const tHigh = targetPt.tdb + Math.max(10, (targetPt.tdb - (adpData?.tdbAdp ?? targetPt.tdb)) * 0.7);
+            const wHigh = targetPt.w + dWdT * (tHigh - targetPt.tdb);
+            const [endPx, endPy] = coordToPixel(tHigh, Math.max(0, wHigh));
 
             return (
               <g>
                 <line
-                  x1={targetX - lineLen * cosA}
-                  y1={targetY + lineLen * sinA}
-                  x2={targetX + 130 * cosA}
-                  y2={targetY - 130 * sinA}
+                  x1={startPx}
+                  y1={startPy}
+                  x2={endPx}
+                  y2={endPy}
                   stroke={accentColor}
-                  strokeWidth="2"
+                  strokeWidth="2.2"
                   strokeDasharray="6,3"
                 />
 
@@ -385,7 +409,9 @@ export const ASHRAEProtractor: React.FC<ASHRAEProtractorProps> = ({
                         ADP (Punto Rocío Aparato)
                       </text>
                       <text x="2" y="9" fill={textColor} fontSize="7.5" fontFamily="Fira Code, monospace">
-                        Tadp: {adpData.tdbAdp.toFixed(1)}°C · w: {(adpData.wAdp * 1000).toFixed(1)} g/kg
+                        {units === 'IP'
+                          ? `Tadp: ${UnitConvert.cToF(adpData.tdbAdp).toFixed(1)}°F · w: ${(adpData.wAdp * 7000).toFixed(0)} gr/lb`
+                          : `Tadp: ${adpData.tdbAdp.toFixed(1)}°C · w: ${(adpData.wAdp * 1000).toFixed(1)} g/kg`}
                       </text>
                     </g>
                   </g>

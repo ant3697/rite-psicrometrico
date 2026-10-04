@@ -29,7 +29,8 @@ import { AHUStepResult } from './HVACSchematicViewer';
 interface ModuleConfigDrawerProps {
   module: AHUModuleItem;
   step?: AHUStepResult;
-  isolatedModuleId: string | null;
+  isolatedModuleId?: string | null;
+  isolatedModuleIds?: string[];
   isDrawerCollapsed: boolean;
   onToggleCollapse: () => void;
   onUpdateParams: (id: string, params: Partial<AHUModuleItem['params']>) => void;
@@ -214,7 +215,8 @@ const CompactSliderNumber: React.FC<CompactSliderNumberProps> = ({
 export const ModuleConfigDrawer: React.FC<ModuleConfigDrawerProps> = ({
   module,
   step,
-  isolatedModuleId,
+  isolatedModuleId = null,
+  isolatedModuleIds,
   isDrawerCollapsed,
   onToggleCollapse,
   onUpdateParams,
@@ -236,7 +238,9 @@ export const ModuleConfigDrawer: React.FC<ModuleConfigDrawerProps> = ({
     border: 'border-cyan-500/30',
   };
 
-  const isIsolated = isolatedModuleId === module.id;
+  const isIsolated = (isolatedModuleIds && isolatedModuleIds.length > 0)
+    ? isolatedModuleIds.includes(module.id)
+    : isolatedModuleId === module.id;
 
   // Thermodynamic deltas
   const deltaT = step ? step.exitPoint.tdb - step.entryPoint.tdb : 0;

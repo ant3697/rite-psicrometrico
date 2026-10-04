@@ -750,6 +750,7 @@ export const SidebarControls: React.FC<SidebarControlsProps> = ({
               { key: 'volumeLines', label: 'Líneas de Volumen Específico (v)', color: 'text-indigo-400' },
               { key: 'processes', label: 'Vectores y Procesos HVAC', color: 'text-cyan-400' },
               { key: 'pointLabels', label: 'Etiquetas de Nombres de Puntos', color: 'text-slate-200' },
+              { key: 'shrProtractor', label: 'Transportador ASHRAE (FCS / SHR y ADP)', color: 'text-amber-400' },
               { key: 'grid', label: 'Rejilla Ortogonal (Tbs / W)', color: 'text-slate-400' },
             ].map(({ key, label, color }) => {
               const active = layers[key as keyof ChartLayerVisibility];

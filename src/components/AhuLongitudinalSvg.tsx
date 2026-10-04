@@ -37,6 +37,7 @@ export interface AhuLongitudinalSvgProps {
   isSplit?: boolean;
   propertiesDetailMode?: 'full' | 'compact' | 'hover';
   isolatedModuleId?: string | null;
+  isolatedModuleIds?: string[];
 }
 
 export const MODULE_SPACING = 0;
@@ -71,7 +72,15 @@ export const AhuLongitudinalSvg: React.FC<AhuLongitudinalSvgProps> = ({
   isSplit = false,
   propertiesDetailMode = 'hover',
   isolatedModuleId = null,
+  isolatedModuleIds,
 }) => {
+  const isModuleIsolated = (modId: string) => {
+    if (isolatedModuleIds && isolatedModuleIds.length > 0) {
+      return isolatedModuleIds.includes(modId);
+    }
+    return isolatedModuleId === modId;
+  };
+
   const [hoveredTransition, setHoveredTransition] = useState<number | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const chassisGroupRef = useRef<SVGGElement | null>(null);
@@ -624,7 +633,7 @@ export const AhuLongitudinalSvg: React.FC<AhuLongitudinalSvgProps> = ({
                     />
 
                     {/* Glowing highlight border when isolated in psychrometric chart */}
-                    {isolatedModuleId === mod.id && (
+                    {isModuleIsolated(mod.id) && (
                       <rect
                         x="-2"
                         y="-2"
@@ -818,14 +827,14 @@ export const AhuLongitudinalSvg: React.FC<AhuLongitudinalSvgProps> = ({
                           x={modWidth / 2}
                           y="-12"
                           textAnchor="middle"
-                          fill={isolatedModuleId === mod.id ? '#38BDF8' : isStepPointSelected ? '#0284C7' : isWhiteTheme ? '#000000' : '#E2E8F0'}
+                          fill={isModuleIsolated(mod.id) ? '#38BDF8' : isStepPointSelected ? '#0284C7' : isWhiteTheme ? '#000000' : '#E2E8F0'}
                           fontSize="13.5"
                           fontWeight="bold"
                           fontFamily="Plus Jakarta Sans"
                         >
                           {getIdaeModuleTitle(mod)}
                         </text>
-                        {isolatedModuleId === mod.id && (
+                        {isModuleIsolated(mod.id) && (
                           <g transform={`translate(${modWidth / 2}, -30)`}>
                             <rect x="-44" y="-9" width="88" height="15" rx="3" fill="#0369A1" stroke="#38BDF8" strokeWidth="1" filter="drop-shadow(0 2px 4px rgba(0,0,0,0.5))" />
                             <text x="0" y="2" textAnchor="middle" fill="#FFFFFF" fontSize="8" fontWeight="bold" fontFamily="JetBrains Mono">
@@ -1236,7 +1245,7 @@ export const AhuLongitudinalSvg: React.FC<AhuLongitudinalSvgProps> = ({
                       }
                       strokeWidth={isModActive ? '2.5' : '1.2'}
                     />
-                    {isolatedModuleId === mod.id && (
+                    {isModuleIsolated(mod.id) && (
                       <rect
                         x="-2"
                         y="-2"

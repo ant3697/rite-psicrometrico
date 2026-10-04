@@ -65,11 +65,14 @@ interface PsychrometricChartProps {
   units: UnitSystem;
   layers: ChartLayerVisibility;
   isolatedProcessInfo?: IsolatedProcessInfo | null;
+  isolatedPointIds?: string[];
+  isolatedProcessIds?: string[];
   onSetIsolatedProcessInfo?: (info: IsolatedProcessInfo | null) => void;
   onDeletePoint?: (id: string) => void;
   onDeleteProcess?: (id: string) => void;
   onDuplicatePoint?: (id: string) => void;
   onLocateModuleInAhu?: (moduleIdOrPointId: string) => void;
+  onToggleLayer?: (layer: keyof ChartLayerVisibility) => void;
   isSplitView?: boolean;
 }
 
@@ -169,11 +172,14 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
   units,
   layers,
   isolatedProcessInfo,
+  isolatedPointIds,
+  isolatedProcessIds,
   onSetIsolatedProcessInfo,
   onDeletePoint,
   onDeleteProcess,
   onDuplicatePoint,
   onLocateModuleInAhu,
+  onToggleLayer,
   isSplitView = false,
 }) => {
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -188,9 +194,19 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
   // Context Menu State (for right-click on points, processes, or canvas)
   const [contextMenu, setContextMenu] = useState<ContextMenuTarget | null>(null);
 
+  // Check if an active isolation is present
+  const hasActiveIsolation = Boolean(
+    (isolatedPointIds && isolatedPointIds.length > 0) ||
+    (isolatedProcessIds && isolatedProcessIds.length > 0) ||
+    isolatedProcessInfo
+  );
+
   // Check if a point belongs to the isolated module process
   const isPointIsolated = useCallback(
     (ptId: string) => {
+      if (isolatedPointIds && isolatedPointIds.length > 0) {
+        return isolatedPointIds.includes(ptId);
+      }
       if (!isolatedProcessInfo) return true;
       if (isolatedProcessInfo.isPassive) {
         return ptId === isolatedProcessInfo.entryPoint.id;
@@ -201,12 +217,15 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
         (isolatedProcessInfo.secondaryEntryPoint && ptId === isolatedProcessInfo.secondaryEntryPoint.id)
       );
     },
-    [isolatedProcessInfo]
+    [isolatedPointIds, isolatedProcessInfo]
   );
 
   // Check if a process connection belongs to the isolated module process
   const isProcessIsolated = useCallback(
     (proc: ProcessConnection) => {
+      if (isolatedProcessIds && isolatedProcessIds.length > 0) {
+        return isolatedProcessIds.includes(proc.id);
+      }
       if (!isolatedProcessInfo) return true;
       if (isolatedProcessInfo.isPassive) return false;
       if (isolatedProcessInfo.processId && proc.id === isolatedProcessInfo.processId) {
@@ -220,7 +239,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
         proc.toPointId === isolatedProcessInfo.exitPoint.id
       );
     },
-    [isolatedProcessInfo]
+    [isolatedProcessIds, isolatedProcessInfo]
   );
 
   // Center diagram on a single state point with focused zoom
@@ -255,7 +274,16 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
 
   // Official Chart Theme: 'ashrae_classic' (Canonical Green on technical paper), 'valcon_color' (Polychrome), or 'dark_blueprint' (CAD)
   const [chartTheme, setChartTheme] = useState<'ashrae_classic' | 'valcon_color' | 'dark_blueprint'>('ashrae_classic');
-  const [showProtractor, setShowProtractor] = useState<boolean>(true);
+  const [localShowProtractor, setLocalShowProtractor] = useState<boolean>(true);
+  const showProtractor = layers.shrProtractor !== undefined ? layers.shrProtractor : localShowProtractor;
+
+  const handleToggleProtractor = useCallback(() => {
+    if (onToggleLayer) {
+      onToggleLayer('shrProtractor');
+    }
+    setLocalShowProtractor((prev) => !prev);
+  }, [onToggleLayer]);
+
   const [showEnthalpyDeviations, setShowEnthalpyDeviations] = useState<boolean>(true);
   const [selectedSHR, setSelectedSHR] = useState<number | null>(null);
 
@@ -846,8 +874,30 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
     // 4. Specific Enthalpy lines (h: 10 to 140 kJ/kg)
     const enthalpyLines: Array<{ h: number; path: string }> = [];
     for (let h = 10; h <= 140; h += 10) {
+      // Find where this enthalpy line intersects the 100% saturation curve
+      let lowT = -10;
+      let highT = 60;
+      for (let iter = 0; iter < 16; iter++) {
+        const midT = (lowT + highT) / 2;
+        const ws = getSaturationHumidityRatio(midT, pressure);
+        if (getEnthalpy(midT, ws) < h) {
+          lowT = midT;
+        } else {
+          highT = midT;
+        }
+      }
+      const tSat = (lowT + highT) / 2;
+      const wSat = getSaturationHumidityRatio(tSat, pressure);
+
       const pts: Array<[number, number]> = [];
-      for (let t = bounds.tdbMin; t <= bounds.tdbMax; t += 1) {
+      // Start directly on the saturation curve (aligned with outer perimeter scale)
+      if (tSat <= bounds.tdbMax && wSat <= bounds.wMax * 1.05 && wSat >= bounds.wMin) {
+        pts.push(coordToPixel(tSat, Math.min(bounds.wMax, wSat)));
+      }
+
+      // Step across dry-bulb temperature only below saturation envelope
+      const startT = Math.max(bounds.tdbMin, tSat);
+      for (let t = startT + 0.5; t <= bounds.tdbMax; t += 0.5) {
         const w = getWFromEnthalpy(t, h);
         if (w >= bounds.wMin && w <= bounds.wMax) {
           pts.push(coordToPixel(t, w));
@@ -1047,7 +1097,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
 
   // Sensible Heat Factor (SHF / FCS) scale on the far right vertical border (Images 1 and 2)
   const shfScaleTicks = useMemo(() => {
-    const values = [0.36, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 1.00];
+    const values = [0.00, 0.20, 0.30, 0.36, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 1.00];
     const tRef = 24.0;
     const wRef = getWFromTdbRh(tRef, 50, pressure);
     const tMax = bounds.tdbMax;
@@ -1057,10 +1107,10 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
       const dWdT = getSlopeFromSHR(shr);
       const wIntersect = wRef + dWdT * deltaT;
       const [, py] = coordToPixel(tMax, wIntersect);
-      const isMajor = [0.36, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90, 1.00].includes(shr);
+      const isMajor = [0.00, 0.20, 0.36, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90, 1.00].includes(shr);
       return {
         shr,
-        label: shr === 1.0 ? '1.00' : shr.toFixed(2),
+        label: shr === 1.0 ? '1.00' : shr === 0.0 ? '0.0' : shr.toFixed(2),
         py,
         isMajor,
         inRange: py >= margin.top - 5 && py <= margin.top + plotHeight + 5,
@@ -1466,7 +1516,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
 
         {/* ASHRAE Protractor Toggle */}
         <button
-          onClick={() => setShowProtractor((prev) => !prev)}
+          onClick={handleToggleProtractor}
           className={`flex items-center gap-1 px-2 py-0.5 rounded-[6px] text-xs font-semibold transition-all ${
             showProtractor
               ? 'bg-[#15803D]/25 text-[#4ade80] border border-[#15803D]/50'
@@ -1971,7 +2021,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
             <g className="processes-layer">
               {processes.map((proc) => {
                 const isIsolated = isProcessIsolated(proc);
-                if (isolatedProcessInfo && !isIsolated && !dimOtherProcesses) {
+                if (hasActiveIsolation && !isIsolated && !dimOtherProcesses) {
                   return null;
                 }
 
@@ -1984,8 +2034,8 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
 
                 const procColor = proc.color || (themeStyles.isDark ? '#38BDF8' : '#0284C7');
                 const placedBadge = labelLayout.placedProcessLabels.find((l) => l.processId === proc.id);
-                const lineOpacity = isolatedProcessInfo && !isIsolated ? 0.12 : 1;
-                const lineWidth = isIsolated && isolatedProcessInfo ? '5' : '3.5';
+                const lineOpacity = hasActiveIsolation && !isIsolated ? 0.12 : 1;
+                const lineWidth = isIsolated && hasActiveIsolation ? '5' : '3.5';
 
                 return (
                   <g
@@ -2023,7 +2073,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
                       strokeWidth={lineWidth}
                       strokeDasharray={proc.type === 'zone_load' ? '6,3' : undefined}
                       markerEnd={proc.type === 'mixing' ? 'url(#process-arrow-amber)' : 'url(#process-arrow)'}
-                      filter={isIsolated && isolatedProcessInfo ? 'drop-shadow(0 0 6px rgba(56,189,248,0.8))' : undefined}
+                      filter={isIsolated && hasActiveIsolation ? 'drop-shadow(0 0 6px rgba(56,189,248,0.8))' : undefined}
                     />
 
                     {/* Anti-collision Leader Line (if badge is offset from line) */}
@@ -2271,10 +2321,10 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
             {/* 1. Point markers and selection halos */}
             {points.map((pt) => {
               const isPtIsolated = isPointIsolated(pt.id);
-              if (isolatedProcessInfo && !isPtIsolated && !dimOtherProcesses) {
+              if (hasActiveIsolation && !isPtIsolated && !dimOtherProcesses) {
                 return null;
               }
-              const ptOpacity = isolatedProcessInfo && !isPtIsolated ? 0.15 : 1;
+              const ptOpacity = hasActiveIsolation && !isPtIsolated ? 0.15 : 1;
               const [px, py] = coordToPixel(pt.tdb, pt.w);
               const isSelected = pt.id === selectedPointId;
 
@@ -2282,7 +2332,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
                 <g
                   key={pt.id}
                   transform={`translate(${px}, ${py})`}
-                  className={isolatedProcessInfo && !isPtIsolated ? 'pointer-events-none' : 'cursor-pointer'}
+                  className={hasActiveIsolation && !isPtIsolated ? 'pointer-events-none' : 'cursor-pointer'}
                   opacity={ptOpacity}
                   onClick={(e) => {
                     e.stopPropagation();
@@ -2336,10 +2386,10 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
                 const pt = points.find((p) => p.id === lbl.pointId);
                 if (!pt) return null;
                 const isPtIsolated = isPointIsolated(pt.id);
-                if (isolatedProcessInfo && !isPtIsolated && !dimOtherProcesses) {
+                if (hasActiveIsolation && !isPtIsolated && !dimOtherProcesses) {
                   return null;
                 }
-                const lblOpacity = isolatedProcessInfo && !isPtIsolated ? 0.15 : 1;
+                const lblOpacity = hasActiveIsolation && !isPtIsolated ? 0.15 : 1;
                 const isSelected = pt.id === selectedPointId;
 
                 return (
@@ -2449,6 +2499,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
               spanW={bounds.wMax - bounds.wMin}
               pressure={pressure}
               theme={chartTheme}
+              units={units}
               activeSHR={selectedSHR}
               onSelectSHR={(shr) => setSelectedSHR(shr)}
               coordToPixel={coordToPixel}
@@ -2500,12 +2551,23 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
           {satEnthalpyTicks.map((tick) => {
             const [px, py] = coordToPixel(tick.tdbSat, tick.wSat);
             const len = tick.isMajor ? 10 : 5;
-            const xOut = px - len * 0.7;
-            const yOut = py - len * 0.7;
-            const xLabel = px - 18 * 0.7;
-            const yLabel = py - 18 * 0.7;
+            
+            // Collinear outward extension along constant enthalpy line
+            // dw/dt ≈ -0.000405 kg/kg per °C
+            const scaleX = plotWidth / (bounds.tdbMax - bounds.tdbMin);
+            const scaleY = plotHeight / (bounds.wMax - bounds.wMin);
+            const vx = -scaleX;
+            const vy = -0.000405 * scaleY;
+            const vLen = Math.hypot(vx, vy);
+            const ux = vx / vLen;
+            const uy = vy / vLen;
 
-            if (px < margin.left - 15 || py < margin.top - 15) return null;
+            const xOut = px + len * ux;
+            const yOut = py + len * uy;
+            const xLabel = px + (len + 8) * ux;
+            const yLabel = py + (len + 8) * uy;
+
+            if (px < margin.left - 20 || py < margin.top - 20) return null;
 
             return (
               <g key={`sat-h-${tick.h}`}>
@@ -2520,7 +2582,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
                 {tick.isMajor && (
                   <text
                     x={xLabel}
-                    y={yLabel}
+                    y={yLabel + 2.5}
                     textAnchor="end"
                     dominantBaseline="middle"
                     fill={themeStyles.axisText}
@@ -2877,7 +2939,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
           dimOtherProcesses={dimOtherProcesses}
           onToggleDimOtherProcesses={() => setDimOtherProcesses(!dimOtherProcesses)}
           showProtractor={showProtractor}
-          onToggleProtractor={() => setShowProtractor(!showProtractor)}
+          onToggleProtractor={handleToggleProtractor}
           showEnthalpyDeviations={showEnthalpyDeviations}
           onToggleEnthalpyDeviations={() => setShowEnthalpyDeviations(!showEnthalpyDeviations)}
           onLocateModuleInAhu={onLocateModuleInAhu}

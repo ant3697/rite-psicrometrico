@@ -70,14 +70,16 @@ export const ASHRAE_SHR_VALUES: Array<{ shr: number; label: string; isMajor: boo
  * SHR = Qs / Qt => deltaW / deltaT = (cpa / hfg) * (1 - SHR) / SHR
  */
 export function getSlopeFromSHR(shr: number): number {
-  if (Math.abs(shr) < 0.001) return 1.0; // Avoid division by zero
+  if (Math.abs(shr) < 0.0001) return 1e6; // Pure latent process: vertical line (infinite dW/dT)
   const cpa = 1.006;   // kJ/(kg*K)
   const hfg = 2501.0;  // kJ/kg at 0°C
   return (cpa / hfg) * ((1 - shr) / shr);
 }
 
 /**
- * Calculates angle in SVG space for an SHR ray taking into account the canvas scaling
+ * Calculates angle in SVG space for an SHR ray taking into account the canvas scaling.
+ * 0 radians = pure sensible cooling (horizontal left: dx < 0, dy = 0).
+ * PI / 2 radians = pure latent cooling (vertical down: dx = 0, dy > 0).
  */
 export function getProtractorAngle(
   shr: number,
@@ -86,14 +88,16 @@ export function getProtractorAngle(
   spanT: number,
   spanW: number
 ): number {
+  if (Math.abs(shr) < 0.0001) {
+    return Math.PI / 2; // Exact 90 degrees straight down in SVG
+  }
   const dWdT = getSlopeFromSHR(shr);
   // Scale factors (pixels per unit)
   const scaleX = plotWidth / spanT;
   const scaleY = plotHeight / spanW;
 
-  // In SVG coordinates, moving towards cooler temperatures (left, -X) and lower moisture (down, -W).
-  // In psychrometric chart pixels, cooler T is smaller X, lower W is larger Y.
-  // The physical angle of the process vector (cooling & dehumidifying):
+  // In SVG coordinates, moving towards cooler temperatures (left, -X) and lower moisture (down, +Y in SVG).
+  // The physical angle of the process vector:
   const angle = Math.atan2(dWdT * scaleY, scaleX);
   return angle;
 }

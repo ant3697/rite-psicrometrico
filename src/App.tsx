@@ -69,7 +69,7 @@ export default function App() {
     comfortEnSeason: 'summer',
     processes: true,
     pointLabels: true,
-    shrProtractor: false,
+    shrProtractor: true,
     grid: true,
   });
 
@@ -473,6 +473,7 @@ export default function App() {
               chartType={chartType}
               units={units}
               layers={layers}
+              onToggleLayer={handleToggleLayer}
               isolatedProcessInfo={isolatedProcessInfo}
               onSetIsolatedProcessInfo={setIsolatedProcessInfo}
               onDeletePoint={handleDeletePoint}

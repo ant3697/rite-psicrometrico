@@ -92,6 +92,7 @@ interface HVACSchematicViewerProps {
   onNavigateToView?: (view: 'chart' | 'points' | 'processes' | 'comfort' | 'schematic') => void;
   isolatedProcessInfo?: IsolatedProcessInfo | null;
   onSetIsolatedProcessInfo?: (info: IsolatedProcessInfo | null) => void;
+  onToggleLayer?: (layer: keyof ChartLayerVisibility) => void;
   pendingArchetypeId?: string | null;
   onClearPendingArchetype?: () => void;
   onOpenArchetypesSidebar?: () => void;
@@ -1006,6 +1007,7 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
   layers,
   onNavigateToView,
   onSetIsolatedProcessInfo,
+  onToggleLayer,
   pendingArchetypeId,
   onClearPendingArchetype,
   onOpenArchetypesSidebar,
@@ -1521,14 +1523,59 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
   const condensateLitersPerHour = ahuStepResults.condensateLitersPerHour;
   const totalPressureDropPa = ahuStepResults.totalPressureDrop;
 
-  // Isolated module and process state for psychrometric chart single transformation inspection
-  const [isolatedModuleId, setIsolatedModuleId] = useState<string | null>(null);
+  // Isolated module IDs for psychrometric chart transformation inspection
+  const [isolatedModuleIds, setIsolatedModuleIds] = useState<string[]>([]);
   const [isolatedProcessId, setIsolatedProcessId] = useState<string | null>(null);
 
-  // Compute isolation payload for PsychrometricChart
+  const isolatedModuleId = isolatedModuleIds.length > 0 ? isolatedModuleIds[0] : null;
+
+  // Multi-step and point isolation payload for PsychrometricChart
+  const { isolatedPointIds, isolatedProcessIds } = useMemo(() => {
+    if (isolatedModuleIds.length === 0 && !isolatedProcessId) {
+      return { isolatedPointIds: [] as string[], isolatedProcessIds: [] as string[] };
+    }
+
+    const ptIds = new Set<string>();
+    const procIds = new Set<string>();
+
+    if (isolatedModuleIds.length > 0) {
+      const targetSteps = ahuStepResults.steps.filter((s) => isolatedModuleIds.includes(s.module.id));
+      targetSteps.forEach((s) => {
+        ptIds.add(s.entryPoint.id);
+        ptIds.add(s.exitPoint.id);
+        if (s.associatedPointId) ptIds.add(s.associatedPointId);
+        if (s.module.type === 'mixing_box') ptIds.add(returnPoint.id);
+
+        processes.forEach((p) => {
+          if (
+            (p.fromPointId === s.entryPoint.id && p.toPointId === s.exitPoint.id) ||
+            p.id.includes(s.module.id)
+          ) {
+            procIds.add(p.id);
+          }
+        });
+      });
+    }
+
+    if (isolatedProcessId) {
+      procIds.add(isolatedProcessId);
+      const proc = processes.find((p) => p.id === isolatedProcessId);
+      if (proc) {
+        ptIds.add(proc.fromPointId);
+        ptIds.add(proc.toPointId);
+      }
+    }
+
+    return {
+      isolatedPointIds: Array.from(ptIds),
+      isolatedProcessIds: Array.from(procIds),
+    };
+  }, [isolatedModuleIds, isolatedProcessId, ahuStepResults.steps, processes, returnPoint.id]);
+
+  // Compute isolation payload for status pill & diagram
   const isolatedProcessInfo = useMemo<IsolatedProcessInfo | null>(() => {
-    if (isolatedModuleId) {
-      const step = ahuStepResults.steps.find((s) => s.module.id === isolatedModuleId);
+    if (isolatedModuleIds.length === 1) {
+      const step = ahuStepResults.steps.find((s) => s.module.id === isolatedModuleIds[0]);
       if (!step) return null;
 
       const matchedProc = processes.find(
@@ -1548,7 +1595,42 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
         process: matchedProc,
         pressureDropPa: step.module.pressureDropPa,
         onClearIsolation: () => {
-          setIsolatedModuleId(null);
+          setIsolatedModuleIds([]);
+          setIsolatedProcessId(null);
+        },
+      };
+    }
+
+    if (isolatedModuleIds.length > 1) {
+      const firstStep = ahuStepResults.steps.find((s) => s.module.id === isolatedModuleIds[0]);
+      const lastStep = ahuStepResults.steps.find((s) => s.module.id === isolatedModuleIds[isolatedModuleIds.length - 1]);
+      const isolatedSteps = ahuStepResults.steps.filter((s) => isolatedModuleIds.includes(s.module.id));
+      const totalDeltaP = isolatedSteps.reduce((acc, s) => acc + (s.module.pressureDropPa || 0), 0);
+      const totalPowerKW = isolatedSteps.reduce((acc, s) => acc + (s.metrics ? Math.abs(s.metrics.qTotal) : 0), 0);
+      const names = isolatedSteps.map((s) => s.module.name).join(', ');
+
+      return {
+        moduleId: isolatedModuleIds.join(','),
+        moduleName: `${isolatedModuleIds.length} etapas aisladas: ${names}`,
+        moduleType: 'multiple',
+        isPassive: false,
+        entryPoint: firstStep ? firstStep.entryPoint : outdoorPoint,
+        exitPoint: lastStep ? lastStep.exitPoint : supplyPoint,
+        pressureDropPa: totalDeltaP,
+        process: totalPowerKW > 0 ? ({
+          id: 'proc-combined',
+          name: names,
+          type: 'sensible_heating',
+          fromPointId: firstStep ? firstStep.entryPoint.id : 'pt-1',
+          toPointId: lastStep ? lastStep.exitPoint.id : 'pt-2',
+          qSensible: 0,
+          qLatent: 0,
+          qTotal: totalPowerKW,
+          moistureExchange: 0,
+          shr: 1,
+        } as ProcessConnection) : undefined,
+        onClearIsolation: () => {
+          setIsolatedModuleIds([]);
           setIsolatedProcessId(null);
         },
       };
@@ -1570,25 +1652,26 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
         exitPoint: ptTo,
         process: proc,
         onClearIsolation: () => {
-          setIsolatedModuleId(null);
+          setIsolatedModuleIds([]);
           setIsolatedProcessId(null);
         },
       };
     }
 
     return null;
-  }, [isolatedModuleId, isolatedProcessId, ahuStepResults.steps, processes, points, returnPoint]);
+  }, [isolatedModuleIds, isolatedProcessId, ahuStepResults.steps, processes, points, returnPoint, outdoorPoint, supplyPoint]);
 
   const handleToggleIsolateModule = (modId: string) => {
-    if (isolatedModuleId === modId) {
-      setIsolatedModuleId(null);
-      setIsolatedProcessId(null);
-    } else {
-      setIsolatedModuleId(modId);
-      setIsolatedProcessId(null);
-      if (schematicMode !== 'split_sync') {
-        setSchematicMode('split_sync');
+    setIsolatedModuleIds((prev) => {
+      if (prev.includes(modId)) {
+        return prev.filter((id) => id !== modId);
+      } else {
+        return [...prev, modId];
       }
+    });
+    setIsolatedProcessId(null);
+    if (schematicMode !== 'split_sync') {
+      setSchematicMode('split_sync');
     }
   };
 
@@ -1668,6 +1751,9 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
     [points, processes, onUpdatePointsAndProcesses]
   );
 
+  // Track previous selectedPointId to only react to user selection in point table/sidebar
+  const prevSelectedPointIdRef = useRef<string | null>(selectedPointId);
+
   const handleLocateModuleInAhu = useCallback(
     (targetId: string) => {
       const step = ahuStepResults.steps.find(
@@ -1679,7 +1765,9 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
       );
       if (step) {
         setEditingModuleId(step.module.id);
-        onSelectPoint(step.associatedPointId || step.exitPoint.id);
+        const pt = step.associatedPointId || step.exitPoint.id;
+        prevSelectedPointIdRef.current = pt;
+        onSelectPoint(pt);
       }
     },
     [ahuStepResults.steps, onSelectPoint]
@@ -1687,7 +1775,26 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
 
   // Bidirectional sync: when selectedPointId changes from the left sidebar, highlight the corresponding module in the cut
   useEffect(() => {
-    if (!selectedPointId) return;
+    // Only respond when selectedPointId actually changes from an external source (sidebar, table, etc.)
+    if (!selectedPointId || selectedPointId === prevSelectedPointIdRef.current) {
+      prevSelectedPointIdRef.current = selectedPointId;
+      return;
+    }
+    prevSelectedPointIdRef.current = selectedPointId;
+
+    // If currently editing a module that is already associated with this point, keep it! Never jump away!
+    if (editingModuleId) {
+      const currentStep = ahuStepResults.steps.find((s) => s.module.id === editingModuleId);
+      if (
+        currentStep &&
+        (currentStep.associatedPointId === selectedPointId ||
+          currentStep.entryPoint.id === selectedPointId ||
+          currentStep.exitPoint.id === selectedPointId)
+      ) {
+        return;
+      }
+    }
+
     const matchedStep = ahuStepResults.steps.find(
       (s) =>
         s.associatedPointId === selectedPointId ||
@@ -1697,7 +1804,7 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
     if (matchedStep) {
       setEditingModuleId(matchedStep.module.id);
     }
-  }, [selectedPointId, ahuStepResults.steps]);
+  }, [selectedPointId, editingModuleId, ahuStepResults.steps]);
 
   // When outdoor (pt-1) or return (pt-2) points change in the sidebar, propagate along the AHU train
   useEffect(() => {
@@ -1729,10 +1836,12 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
   const handleSelectModuleAndPoint = (modId: string, ptId?: string) => {
     setEditingModuleId(modId);
     if (ptId) {
+      prevSelectedPointIdRef.current = ptId;
       onSelectPoint(ptId);
     } else {
       const step = ahuStepResults.steps.find((s) => s.module.id === modId);
       if (step?.associatedPointId) {
+        prevSelectedPointIdRef.current = step.associatedPointId;
         onSelectPoint(step.associatedPointId);
       }
     }
@@ -2576,6 +2685,7 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
               propertiesDetailMode={propertiesDetailMode}
               onOpenEducationalGuide={handleOpenEducationalGuide}
               isolatedModuleId={isolatedModuleId}
+              isolatedModuleIds={isolatedModuleIds}
             />
 
             {/* Bottom Floating Hint Overlay */}
@@ -2633,8 +2743,10 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
                   <span className="text-[10px] text-slate-400 hidden sm:inline">Aislar transformación:</span>
                   <select
                     value={
-                      isolatedModuleId
-                        ? `mod:${isolatedModuleId}`
+                      isolatedModuleIds.length === 1
+                        ? `mod:${isolatedModuleIds[0]}`
+                        : isolatedModuleIds.length > 1
+                        ? 'multiple'
                         : isolatedProcessId
                         ? `proc:${isolatedProcessId}`
                         : 'all'
@@ -2642,25 +2754,29 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
                     onChange={(e) => {
                       const val = e.target.value;
                       if (val === 'all') {
-                        setIsolatedModuleId(null);
+                        setIsolatedModuleIds([]);
                         setIsolatedProcessId(null);
                       } else if (val.startsWith('mod:')) {
-                        setIsolatedModuleId(val.replace('mod:', ''));
+                        setIsolatedModuleIds([val.replace('mod:', '')]);
                         setIsolatedProcessId(null);
                       } else if (val.startsWith('proc:')) {
                         setIsolatedProcessId(val.replace('proc:', ''));
-                        setIsolatedModuleId(null);
+                        setIsolatedModuleIds([]);
                       }
                     }}
                     className="bg-slate-900 border border-slate-700 hover:border-cyan-400 rounded px-2 py-0.5 text-[10px] font-mono text-cyan-300 focus:outline-none cursor-pointer"
                   >
                     <option value="all">Ciclo Completo (Todos los procesos)</option>
+                    {isolatedModuleIds.length > 1 && (
+                      <option value="multiple">📌 {isolatedModuleIds.length} etapas aisladas</option>
+                    )}
                     <optgroup label="Transformaciones por Módulo UTA">
                       {enabledModules.map((m, idx) => {
                         const step = ahuStepResults.steps.find((s) => s.module.id === m.id);
+                        const isSelected = isolatedModuleIds.includes(m.id);
                         return (
                           <option key={m.id} value={`mod:${m.id}`}>
-                            {idx + 1}. {m.name} {step?.isTransformation ? `(${step.processName || 'Transformación'})` : '(Isentálpico / Pasivo)'}
+                            {isSelected ? '✓ ' : ''}{idx + 1}. {m.name} {step?.isTransformation ? `(${step.processName || 'Transformación'})` : '(Isentálpico / Pasivo)'}
                           </option>
                         );
                       })}
@@ -2675,10 +2791,10 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
                       </optgroup>
                     )}
                   </select>
-                  {(isolatedModuleId || isolatedProcessId) && (
+                  {(isolatedModuleIds.length > 0 || isolatedProcessId) && (
                     <button
                       onClick={() => {
-                        setIsolatedModuleId(null);
+                        setIsolatedModuleIds([]);
                         setIsolatedProcessId(null);
                       }}
                       className="px-1.5 py-0.5 rounded text-[10px] bg-rose-950/60 hover:bg-rose-900 border border-rose-800/60 text-rose-300 font-bold transition-colors cursor-pointer"
@@ -2742,7 +2858,7 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
 
                   <button
                     onClick={() => {
-                      setIsolatedModuleId(null);
+                      setIsolatedModuleIds([]);
                       setIsolatedProcessId(null);
                     }}
                     className="text-[9.5px] px-2 py-0.5 rounded bg-rose-950/70 hover:bg-rose-900 border border-rose-800/60 text-rose-300 font-semibold transition-colors cursor-pointer shrink-0"
@@ -2765,16 +2881,27 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
                   chartType={chartType}
                   units={units}
                   layers={layers}
+                  onToggleLayer={onToggleLayer}
                   isolatedProcessInfo={isolatedProcessInfo}
+                  isolatedPointIds={isolatedPointIds}
+                  isolatedProcessIds={isolatedProcessIds}
                   onSetIsolatedProcessInfo={(info) => {
                     if (info?.moduleId) {
-                      setIsolatedModuleId(info.moduleId);
-                      setIsolatedProcessId(null);
-                    } else if (info?.processId) {
-                      setIsolatedProcessId(info.processId);
-                      setIsolatedModuleId(null);
+                      handleToggleIsolateModule(info.moduleId);
+                    } else if (info && info.processId) {
+                      const procId = info.processId;
+                      const step = ahuStepResults.steps.find((s) =>
+                        (info.process && s.entryPoint.id === info.process.fromPointId && s.exitPoint.id === info.process.toPointId) ||
+                        s.module.id.includes(procId.replace('proc-', ''))
+                      );
+                      if (step) {
+                        handleToggleIsolateModule(step.module.id);
+                      } else {
+                        setIsolatedProcessId(procId);
+                        setIsolatedModuleIds([]);
+                      }
                     } else {
-                      setIsolatedModuleId(null);
+                      setIsolatedModuleIds([]);
                       setIsolatedProcessId(null);
                     }
                   }}
@@ -2892,6 +3019,7 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
                   isSplit={true}
                   propertiesDetailMode={propertiesDetailMode}
                   isolatedModuleId={isolatedModuleId}
+                  isolatedModuleIds={isolatedModuleIds}
                 />
               </div>
 
@@ -2931,6 +3059,7 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
           module={activeEditingModule}
           step={ahuStepResults.steps.find((s) => s.module.id === activeEditingModule.id)}
           isolatedModuleId={isolatedModuleId}
+          isolatedModuleIds={isolatedModuleIds}
           isDrawerCollapsed={isDrawerCollapsed}
           onToggleCollapse={() => setIsDrawerCollapsed(!isDrawerCollapsed)}
           onUpdateParams={handleUpdateModuleParams}
