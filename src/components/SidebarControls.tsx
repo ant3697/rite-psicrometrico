@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   StatePoint,
   ProcessConnection,
@@ -7,6 +7,7 @@ import {
   UnitSystem,
   PsychroInputs,
   IsolatedProcessInfo,
+  AHUModuleType,
 } from '../types/psychrometrics';
 import {
   UnitConvert,
@@ -24,8 +25,13 @@ import {
   Shuffle,
   ChevronDown,
   ChevronUp,
+  ChevronLeft,
   Target,
+  LayoutTemplate,
+  Search,
+  Check,
 } from 'lucide-react';
+import { AHU_ARCHETYPES, AhuArchetype, getIdaeModuleTitle } from './HVACSchematicViewer';
 
 interface SidebarControlsProps {
   points: StatePoint[];
@@ -43,6 +49,10 @@ interface SidebarControlsProps {
   onToggleLayer: (layerKey: keyof ChartLayerVisibility) => void;
   isolatedProcessInfo?: IsolatedProcessInfo | null;
   onSetIsolatedProcessInfo?: (info: IsolatedProcessInfo | null) => void;
+  onToggleCollapse?: () => void;
+  activeTab?: 'points' | 'processes' | 'layers' | 'archetypes';
+  onTabChange?: (tab: 'points' | 'processes' | 'layers' | 'archetypes') => void;
+  onLoadArchetype?: (archetypeId: string) => void;
 }
 
 export const SidebarControls: React.FC<SidebarControlsProps> = ({
@@ -61,8 +71,31 @@ export const SidebarControls: React.FC<SidebarControlsProps> = ({
   onToggleLayer,
   isolatedProcessInfo,
   onSetIsolatedProcessInfo,
+  onToggleCollapse,
+  activeTab: activeTabProp,
+  onTabChange,
+  onLoadArchetype,
 }) => {
-  const [activeTab, setActiveTab] = useState<'points' | 'processes' | 'layers'>('points');
+  const [internalActiveTab, setInternalActiveTab] = useState<'points' | 'processes' | 'layers' | 'archetypes'>('points');
+  const currentTab = activeTabProp ?? internalActiveTab;
+  const handleTabChange = (tab: 'points' | 'processes' | 'layers' | 'archetypes') => {
+    setInternalActiveTab(tab);
+    onTabChange?.(tab);
+  };
+
+  const [archetypeSearch, setArchetypeSearch] = useState('');
+  const [loadedArchetypeId, setLoadedArchetypeId] = useState<string | null>(null);
+
+  const filteredArchetypes = useMemo(() => {
+    const list = AHU_ARCHETYPES.filter((a) => a.id !== 'empty_canvas');
+    if (!archetypeSearch.trim()) return list;
+    const q = archetypeSearch.toLowerCase();
+    return list.filter(
+      (a) =>
+        a.name.toLowerCase().includes(q) ||
+        a.description.toLowerCase().includes(q)
+    );
+  }, [archetypeSearch]);
 
   // New process creation state
   const [newProcFrom, setNewProcFrom] = useState<string>('');
@@ -113,37 +146,57 @@ export const SidebarControls: React.FC<SidebarControlsProps> = ({
   return (
     <aside className="w-84 lg:w-96 h-full flex flex-col bg-[#1a1a1c] border-r border-[rgba(255,255,255,0.1)] shrink-0 select-none overflow-hidden font-primary">
       {/* Sidebar Tabs (tabs component from Design System) */}
-      <div className="p-2 border-b border-[rgba(255,255,255,0.1)] bg-[#0a0a0c]/60 shrink-0">
-        <div className="tabs-container w-full">
+      <div className="p-2 border-b border-[rgba(255,255,255,0.1)] bg-[#0a0a0c]/60 shrink-0 flex items-center gap-1.5">
+        <div className="tabs-container flex-1 overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
           <button
-            onClick={() => setActiveTab('points')}
-            className={`tab-item flex-1 justify-center text-[13px] ${
-              activeTab === 'points' ? 'active' : ''
+            onClick={() => handleTabChange('points')}
+            className={`tab-item flex-1 justify-center text-[12px] !px-1.5 ${
+              currentTab === 'points' ? 'active' : ''
             }`}
           >
             Puntos ({points.length})
           </button>
           <button
-            onClick={() => setActiveTab('processes')}
-            className={`tab-item flex-1 justify-center text-[13px] ${
-              activeTab === 'processes' ? 'active' : ''
+            onClick={() => handleTabChange('processes')}
+            className={`tab-item flex-1 justify-center text-[12px] !px-1.5 ${
+              currentTab === 'processes' ? 'active' : ''
             }`}
           >
             Procesos ({processes.length})
           </button>
           <button
-            onClick={() => setActiveTab('layers')}
-            className={`tab-item flex-1 justify-center text-[13px] ${
-              activeTab === 'layers' ? 'active' : ''
+            onClick={() => handleTabChange('layers')}
+            className={`tab-item flex-1 justify-center text-[12px] !px-1.5 ${
+              currentTab === 'layers' ? 'active' : ''
             }`}
           >
             Capas
           </button>
+          <button
+            onClick={() => handleTabChange('archetypes')}
+            className={`tab-item flex-1 justify-center text-[12px] !px-1.5 flex items-center gap-1 ${
+              currentTab === 'archetypes' ? 'active' : ''
+            }`}
+            title="Plantillas y arquetipos canónicos de UTA (Guía IDAE / ATECYR)"
+          >
+            <LayoutTemplate className="w-3.5 h-3.5 text-[#fbbf24] shrink-0" />
+            <span>Plantillas</span>
+          </button>
         </div>
+        {onToggleCollapse && (
+          <button
+            type="button"
+            onClick={onToggleCollapse}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-[#fbbf24] hover:bg-white/10 transition-colors shrink-0 cursor-pointer"
+            title="Plegar panel de puntos psicrométricos"
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+        )}
       </div>
 
       {/* Tab 1: State Points & Selected Point Editor */}
-      {activeTab === 'points' && (
+      {currentTab === 'points' && (
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {/* Points List Header & Add Button */}
           <div className="flex items-center justify-between">
@@ -481,7 +534,7 @@ export const SidebarControls: React.FC<SidebarControlsProps> = ({
       )}
 
       {/* Tab 2: HVAC Processes Builder */}
-      {activeTab === 'processes' && (
+      {currentTab === 'processes' && (
         <div className="flex-1 overflow-y-auto p-4 space-y-5">
           {/* Create new process box */}
           <div className="bg-slate-950/70 p-3.5 rounded-xl border border-slate-800 space-y-3">
@@ -683,7 +736,7 @@ export const SidebarControls: React.FC<SidebarControlsProps> = ({
       )}
 
       {/* Tab 3: Chart Layers & Visual Options */}
-      {activeTab === 'layers' && (
+      {currentTab === 'layers' && (
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           <span className="text-xs uppercase font-semibold tracking-wider text-slate-400">
             Capas y Curvas Visibles
@@ -825,6 +878,110 @@ export const SidebarControls: React.FC<SidebarControlsProps> = ({
                 );
               })}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Tab 4: UTA Archetypes & Templates */}
+      {currentTab === 'archetypes' && (
+        <div className="flex-1 overflow-y-auto p-3.5 space-y-3 scrollbar-thin">
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <span className="text-[12px] uppercase font-bold tracking-wider text-white flex items-center gap-1.5">
+                <LayoutTemplate className="w-3.5 h-3.5 text-[#fbbf24]" />
+                <span>Plantillas UTA (IDAE / ATECYR)</span>
+              </span>
+              <span className="text-[10px] font-mono text-[#fbbf24] bg-[#fbbf24]/10 px-1.5 py-0.5 rounded border border-[#fbbf24]/20 font-semibold">
+                {filteredArchetypes.length} canónicas
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-400 leading-snug">
+              Configuraciones estándar basadas en la Guía Técnica IDAE de Climatización. Haz clic para cargar en la máquina.
+            </p>
+          </div>
+
+          {/* Search bar */}
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              type="text"
+              value={archetypeSearch}
+              onChange={(e) => setArchetypeSearch(e.target.value)}
+              placeholder="Buscar por nombre, batería, ventilador..."
+              className="w-full pl-8 pr-3 py-1.5 bg-[#0a0a0c] border border-white/15 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#fbbf24] transition-colors"
+            />
+          </div>
+
+          {/* List of Archetypes */}
+          <div className="space-y-2">
+            {filteredArchetypes.map((arch: AhuArchetype) => {
+              const isJustLoaded = loadedArchetypeId === arch.id;
+              return (
+                <div
+                  key={arch.id}
+                  onClick={() => {
+                    if (onLoadArchetype) {
+                      onLoadArchetype(arch.id);
+                      setLoadedArchetypeId(arch.id);
+                      setTimeout(() => setLoadedArchetypeId(null), 2000);
+                    }
+                  }}
+                  className={`p-3 rounded-xl border transition-all cursor-pointer flex flex-col gap-2 group ${
+                    isJustLoaded
+                      ? 'bg-emerald-950/40 border-emerald-500/70 shadow-[0_0_12px_rgba(16,185,129,0.2)]'
+                      : 'bg-[#0a0a0c]/60 hover:bg-white/5 border-white/10 hover:border-[#fbbf24]/60 shadow-sm hover:shadow-[0_0_12px_rgba(251,191,36,0.15)]'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="text-xs font-bold text-white group-hover:text-[#fbbf24] transition-colors leading-snug">
+                      {arch.name}
+                    </span>
+                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white/5 text-[#fbbf24] border border-[#fbbf24]/30 shrink-0 font-semibold">
+                      {arch.moduleTypes.length} secciones
+                    </span>
+                  </div>
+
+                  <p className="text-[11px] text-slate-300 leading-snug">
+                    {arch.description}
+                  </p>
+
+                  {/* Modules sequence tags */}
+                  {arch.moduleTypes.length > 0 && (
+                    <div className="flex flex-wrap gap-1 pt-0.5">
+                      {arch.moduleTypes.map((type: AHUModuleType, i: number) => (
+                        <span
+                          key={i}
+                          className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-white/5 text-slate-300 border border-white/10"
+                        >
+                          {getIdaeModuleTitle({ type, id: '', name: type, enabled: true, pressureDropPa: 0, params: {} })}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between pt-1 border-t border-white/5 text-[10px]">
+                    <span className="text-slate-400 font-mono">
+                      Guía IDAE / ATECYR
+                    </span>
+                    <span className={`font-semibold flex items-center gap-1 ${
+                      isJustLoaded ? 'text-emerald-400' : 'text-[#fbbf24] group-hover:translate-x-0.5 transition-transform'
+                    }`}>
+                      {isJustLoaded ? (
+                        <>
+                          <Check className="w-3 h-3 text-emerald-400" />
+                          <span>¡Cargado en UTA!</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>Cargar en máquina</span>
+                          <ArrowRight className="w-3 h-3" />
+                        </>
+                      )}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

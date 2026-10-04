@@ -14,6 +14,8 @@ import {
   Compass,
   Activity,
   Wind,
+  PanelLeftOpen,
+  PanelLeftClose,
 } from 'lucide-react';
 
 interface TopBarProps {
@@ -30,6 +32,8 @@ interface TopBarProps {
   onOpenExportModal: () => void;
   onOpenAiAssistant: () => void;
   onOpenIdaeModal?: () => void;
+  isSidebarCollapsed?: boolean;
+  onToggleSidebar?: () => void;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -46,11 +50,27 @@ export const TopBar: React.FC<TopBarProps> = ({
   onOpenExportModal,
   onOpenAiAssistant,
   onOpenIdaeModal,
+  isSidebarCollapsed,
+  onToggleSidebar,
 }) => {
   return (
     <header className="h-12 bg-[#0a0a0c]/90 backdrop-blur-md border-b border-[rgba(255,255,255,0.1)] px-3 sm:px-4 flex items-center justify-between shrink-0 select-none z-30 font-primary">
       {/* Zone 1: Brand title, one line wordmark */}
       <div className="flex items-center gap-2">
+        {onToggleSidebar && (
+          <button
+            type="button"
+            onClick={onToggleSidebar}
+            className="hidden lg:flex p-1.5 rounded-lg text-slate-400 hover:text-[#fbbf24] hover:bg-white/10 transition-colors cursor-pointer"
+            title={isSidebarCollapsed ? "Desplegar panel de puntos psicrométricos" : "Plegar panel de puntos psicrométricos"}
+          >
+            {isSidebarCollapsed ? (
+              <PanelLeftOpen className="w-4 h-4 text-[#fbbf24]" />
+            ) : (
+              <PanelLeftClose className="w-4 h-4" />
+            )}
+          </button>
+        )}
         <div className="w-7 h-7 rounded-[5px] bg-[#fbbf24] text-black flex items-center justify-center font-bold text-sm shadow-[0_0_8px_rgba(251,191,36,0.3)]">
           Ψ
         </div>

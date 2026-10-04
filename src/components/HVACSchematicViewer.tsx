@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import {
   StatePoint,
   ProcessConnection,
@@ -91,6 +92,9 @@ interface HVACSchematicViewerProps {
   onNavigateToView?: (view: 'chart' | 'points' | 'processes' | 'comfort' | 'schematic') => void;
   isolatedProcessInfo?: IsolatedProcessInfo | null;
   onSetIsolatedProcessInfo?: (info: IsolatedProcessInfo | null) => void;
+  pendingArchetypeId?: string | null;
+  onClearPendingArchetype?: () => void;
+  onOpenArchetypesSidebar?: () => void;
 }
 
 interface ViewTransform {
@@ -343,12 +347,14 @@ export const MODULE_CATALOG: Array<{
 ];
 
 // Presets archetypes to easily load or reset AHU setups
-const AHU_ARCHETYPES: Array<{
+export interface AhuArchetype {
   id: string;
   name: string;
   description: string;
   moduleTypes: AHUModuleType[];
-}> = [
+}
+
+export const AHU_ARCHETYPES: AhuArchetype[] = [
   {
     id: 'idae_fig2_superior',
     name: 'Guía IDAE Figura 2 (Superior): UTA sin Baterías (1,30 m)',
@@ -1000,6 +1006,9 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
   layers,
   onNavigateToView,
   onSetIsolatedProcessInfo,
+  pendingArchetypeId,
+  onClearPendingArchetype,
+  onOpenArchetypesSidebar,
 }) => {
   // Schematic mode: 'ahu_section', 'building_system', 'split_sync'
   const [schematicMode, setSchematicMode] = useState<'ahu_section' | 'building_system' | 'split_sync'>('ahu_section');
@@ -1090,12 +1099,12 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
 
   // Dynamic SVG ViewBox width (tight fit without dead space)
   const dynamicSvgViewBoxWidth = useMemo(() => {
-    return dynamicChassisWidth + 280;
+    return dynamicChassisWidth + 210;
   }, [dynamicChassisWidth]);
 
-  // Selected module for parameters configuration
+  // Selected module for parameters configuration (drawer collapsed by default to maximize canvas space)
   const [editingModuleId, setEditingModuleId] = useState<string | null>('mod-cooling');
-  const [isDrawerCollapsed, setIsDrawerCollapsed] = useState<boolean>(false);
+  const [isDrawerCollapsed, setIsDrawerCollapsed] = useState<boolean>(true);
 
   // Real-time synchronization toggle (auto-sync psychrometric points on slider move)
   const [autoSyncCycle, setAutoSyncCycle] = useState<boolean>(true);
@@ -1164,26 +1173,78 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
     panY: 0,
   });
 
-  // Archetypes selector modal/popover
+  // Archetypes selector modal (Draggable & Floating)
   const [isArchetypesOpen, setIsArchetypesOpen] = useState<boolean>(false);
-  const archetypesDropdownRef = useRef<HTMLDivElement>(null);
+  const [archetypesPos, setArchetypesPos] = useState<{ x: number; y: number }>({ x: 0, y: 70 });
+  const [isDraggingArchetypes, setIsDraggingArchetypes] = useState<boolean>(false);
+  const archetypesDragRef = useRef<{ mouseX: number; mouseY: number; startX: number; startY: number }>({
+    mouseX: 0,
+    mouseY: 0,
+    startX: 0,
+    startY: 70,
+  });
 
-  // Close archetypes dropdown when clicking outside
+  // Module Palette collapsed state (default collapsed as requested)
+  const [isPaletteCollapsed, setIsPaletteCollapsed] = useState<boolean>(true);
+
+  // Center window on opening
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (
-        archetypesDropdownRef.current &&
-        !archetypesDropdownRef.current.contains(event.target as Node)
-      ) {
+    if (isArchetypesOpen && typeof window !== 'undefined') {
+      const modalWidth = Math.min(580, window.innerWidth - 32);
+      const startX = Math.max(16, (window.innerWidth - modalWidth) / 2);
+      const startY = Math.max(70, Math.min(90, (window.innerHeight - 560) / 2));
+      setArchetypesPos({ x: startX, y: startY });
+    }
+  }, [isArchetypesOpen]);
+
+  const handleArchetypesMouseDown = (e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest('button')) return;
+    setIsDraggingArchetypes(true);
+    archetypesDragRef.current = {
+      mouseX: e.clientX,
+      mouseY: e.clientY,
+      startX: archetypesPos.x,
+      startY: archetypesPos.y,
+    };
+  };
+
+  // Handle drag mouse move and mouse up
+  useEffect(() => {
+    if (!isDraggingArchetypes) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const dx = e.clientX - archetypesDragRef.current.mouseX;
+      const dy = e.clientY - archetypesDragRef.current.mouseY;
+      const newX = Math.max(10, Math.min(window.innerWidth - 250, archetypesDragRef.current.startX + dx));
+      const newY = Math.max(50, Math.min(window.innerHeight - 100, archetypesDragRef.current.startY + dy));
+      setArchetypesPos({ x: newX, y: newY });
+    };
+
+    const handleMouseUp = () => {
+      setIsDraggingArchetypes(false);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDraggingArchetypes]);
+
+  // Close archetypes dropdown when pressing Escape
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
         setIsArchetypesOpen(false);
       }
     };
 
     if (isArchetypesOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('keydown', handleKeyDown);
     }
     return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
     };
   }, [isArchetypesOpen]);
 
@@ -1218,14 +1279,29 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
     });
   };
 
-  // Zoom All fits the entire content naturally to 100% of the SVG ViewBox
+  // Zoom All fits the entire content naturally to fill the available canvas area
   const handleZoomAll = useCallback(() => {
+    if (!ahuContainerRef.current) {
+      setTransform({ zoom: 1.0, panX: 0, panY: 0 });
+      return;
+    }
+    const containerW = ahuContainerRef.current.clientWidth - 16;
+    const containerH = ahuContainerRef.current.clientHeight - 16;
+    if (containerW <= 0 || containerH <= 0) {
+      setTransform({ zoom: 1.0, panX: 0, panY: 0 });
+      return;
+    }
+    const scaleX = containerW / dynamicSvgViewBoxWidth;
+    const scaleY = containerH / dynamicSvgViewBoxHeight;
+    const optimalScale = Math.min(scaleX, scaleY);
+    const optimalZoom = Math.min(2.2, Math.max(0.7, Number((optimalScale * 1.05).toFixed(2))));
+
     setTransform({
-      zoom: 1.0,
+      zoom: optimalZoom,
       panX: 0,
       panY: 0,
     });
-  }, []);
+  }, [dynamicSvgViewBoxWidth, dynamicSvgViewBoxHeight]);
 
   const handleCenterUnit = () => {
     setTransform((prev) => ({
@@ -1813,6 +1889,14 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
     }
   };
 
+  // Synchronize externally loaded archetype from sidebar
+  useEffect(() => {
+    if (pendingArchetypeId) {
+      handleLoadArchetype(pendingArchetypeId);
+      onClearPendingArchetype?.();
+    }
+  }, [pendingArchetypeId]);
+
   // ---------------- DRAG AND DROP HANDLERS TO BUILD AHU ----------------
   const handlePaletteDragStart = (e: React.DragEvent, type: AHUModuleType) => {
     e.dataTransfer.setData('text/plain', type);
@@ -1910,50 +1994,130 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
         {/* View mode toggle & Quick Templates */}
         <div className="flex items-center flex-wrap gap-2">
           {/* Archetypes / Templates Dropdown button */}
-          <div className="relative" ref={archetypesDropdownRef}>
+          <div>
             <button
-              onClick={() => setIsArchetypesOpen(!isArchetypesOpen)}
+              onClick={() => {
+                if (onOpenArchetypesSidebar) {
+                  onOpenArchetypesSidebar();
+                } else {
+                  setIsArchetypesOpen(true);
+                }
+              }}
               className="btn-secondary text-[12px]"
-              title="Cargar configuraciones predefinidas de UTA"
+              title="Cargar configuraciones predefinidas de UTA en el panel lateral"
             >
               <LayoutTemplate className="w-3.5 h-3.5 text-[#fbbf24]" />
               <span>Plantillas UTA</span>
             </button>
 
-            {isArchetypesOpen && (
-              <div className="absolute right-0 mt-2 w-92 bg-[#121215] border border-white/20 rounded-xl shadow-[0_25px_60px_rgba(0,0,0,0.95)] backdrop-blur-2xl p-2 z-[100] space-y-1">
-                <div className="px-3 py-2 text-[11px] font-bold text-[#fbbf24] font-mono uppercase tracking-wider border-b border-white/10 flex justify-between items-center bg-black/40 rounded-t-lg">
-                  <span className="flex items-center gap-1.5">
-                    <LayoutTemplate className="w-3.5 h-3.5 text-[#fbbf24]" />
-                    <span>Arquetipos de UTA (Guía IDAE / ATECYR)</span>
-                  </span>
-                  <button
-                    onClick={() => setIsArchetypesOpen(false)}
-                    className="p-1 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
+            {isArchetypesOpen && typeof document !== 'undefined' && createPortal(
+              <div className="fixed inset-0 z-[999999] pointer-events-none select-none font-primary">
+                {/* Backdrop: click to close */}
+                <div
+                  className="absolute inset-0 bg-black/50 backdrop-blur-[2px] pointer-events-auto"
+                  onClick={() => setIsArchetypesOpen(false)}
+                />
+
+                {/* Floating Draggable Window */}
+                <div
+                  style={{
+                    position: 'fixed',
+                    left: `${archetypesPos.x}px`,
+                    top: `${archetypesPos.y}px`,
+                    width: 'min(580px, calc(100vw - 32px))',
+                    maxHeight: 'calc(100vh - 90px)',
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                  className="pointer-events-auto panel-glass overflow-hidden shadow-[0_25px_80px_rgba(0,0,0,0.95)] border border-[#fbbf24]/50 bg-[#121215]/95 flex flex-col rounded-2xl ring-1 ring-[#fbbf24]/20 animate-in fade-in zoom-in-95 duration-150"
+                >
+                  {/* Draggable Header */}
+                  <div
+                    onMouseDown={handleArchetypesMouseDown}
+                    className={`flex items-center justify-between px-4 py-3 border-b border-white/10 bg-[#0a0a0c]/85 shrink-0 ${
+                      isDraggingArchetypes ? 'cursor-grabbing' : 'cursor-grab'
+                    }`}
+                    title="Haz clic y arrastra para desplazar la ventana libremente por la pantalla"
                   >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-                <div className="max-h-[60vh] overflow-y-auto space-y-1 pr-1 scrollbar-thin">
-                  {AHU_ARCHETYPES.map((arch) => (
-                    <button
-                      key={arch.id}
-                      onClick={() => handleLoadArchetype(arch.id)}
-                      className="w-full text-left p-2.5 rounded-lg hover:bg-white/10 border border-transparent hover:border-[#fbbf24]/40 transition-all group flex flex-col gap-1 cursor-pointer"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-white group-hover:text-[#fbbf24] transition-colors">
-                          {arch.name}
-                        </span>
-                        <ChevronRight className="w-3.5 h-3.5 text-slate-500 group-hover:text-[#fbbf24] transition-transform group-hover:translate-x-0.5 shrink-0" />
+                    <div className="flex items-center gap-2.5 pointer-events-none">
+                      <div className="w-7 h-7 rounded-[6px] bg-[#fbbf24]/15 border border-[#fbbf24]/30 flex items-center justify-center text-[#fbbf24]">
+                        <LayoutTemplate className="w-4 h-4" />
                       </div>
-                      <span className="text-[11px] text-slate-300 leading-snug line-clamp-2">
-                        {arch.description}
-                      </span>
-                    </button>
-                  ))}
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-sm font-bold text-white tracking-wide">
+                            Plantillas y Arquetipos de UTA
+                          </h3>
+                          <span className="text-[10px] font-mono text-[#fbbf24] bg-[#fbbf24]/15 px-1.5 py-0.5 rounded border border-[#fbbf24]/30 flex items-center gap-1 font-semibold">
+                            <Move className="w-2.5 h-2.5" /> Desplazable
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-400">
+                          Guía IDAE / ATECYR · Secciones y longitudes canónicas
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const modalWidth = Math.min(580, window.innerWidth - 32);
+                          setArchetypesPos({
+                            x: Math.max(16, (window.innerWidth - modalWidth) / 2),
+                            y: 70,
+                          });
+                        }}
+                        className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-white/10 transition-colors cursor-pointer"
+                        title="Centrar ventana"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setIsArchetypesOpen(false)}
+                        className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-white/10 transition-colors cursor-pointer"
+                        title="Cerrar (Esc)"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Scrollable Templates Body */}
+                  <div className="p-3.5 space-y-2.5 overflow-y-auto pr-2 scrollbar-thin flex-1 max-h-[calc(100vh-180px)]">
+                    {AHU_ARCHETYPES.map((arch) => (
+                      <button
+                        key={arch.id}
+                        type="button"
+                        onClick={() => {
+                          handleLoadArchetype(arch.id);
+                          setIsArchetypesOpen(false);
+                        }}
+                        className="w-full text-left p-3 rounded-xl bg-[#0a0a0c]/80 hover:bg-white/10 border border-white/10 hover:border-[#fbbf24]/60 transition-all group flex flex-col gap-1.5 cursor-pointer shadow-sm hover:shadow-[0_0_15px_rgba(251,191,36,0.15)]"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-white group-hover:text-[#fbbf24] transition-colors">
+                            {arch.name}
+                          </span>
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-white/5 text-[#fbbf24] border border-[#fbbf24]/30 font-semibold">
+                            {arch.moduleTypes.length} secciones
+                          </span>
+                        </div>
+                        <span className="text-[11px] text-slate-300 leading-snug">
+                          {arch.description}
+                        </span>
+                        <div className="flex items-center gap-2 mt-0.5 text-[10px] font-mono text-slate-400">
+                          <span>● {arch.moduleTypes.length} módulos</span>
+                          <span>·</span>
+                          <span className="text-emerald-400 font-semibold group-hover:underline">
+                            Clic para cargar en la máquina
+                          </span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              </div>,
+              document.body
             )}
           </div>
 
@@ -2060,14 +2224,36 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
 
       {/* ---------------- 2. DRAGGABLE COMPONENT PALETTE (PALETA DE COMPONENTES) ---------------- */}
       {schematicMode === 'ahu_section' && (
-        <div className="panel-glass p-2 px-3 space-y-1.5 relative z-10 shrink-0">
+        <div className="panel-glass p-2 px-3 space-y-1.5 relative z-10 shrink-0 transition-all duration-200">
           <div className="flex items-center justify-between text-xs">
-            <span className="font-bold text-white text-[11px] uppercase tracking-wider flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setIsPaletteCollapsed((prev) => !prev)}
+              className="font-bold text-white text-[11px] uppercase tracking-wider flex items-center gap-1.5 hover:text-[#fbbf24] transition-colors cursor-pointer group select-none"
+              title={isPaletteCollapsed ? "Desplegar paleta de módulos" : "Plegar paleta de módulos"}
+            >
               <GripVertical className="w-3.5 h-3.5 text-[#fbbf24]" />
-              <span>Paleta de Módulos (Arrastra a la UTA o pulsa '+' para añadir):</span>
-            </span>
+              <span>Paleta de Módulos</span>
+              <span className="text-[10px] text-slate-400 font-normal hidden sm:inline normal-case">
+                (Arrastra a la UTA o pulsa '+' para añadir)
+              </span>
+              {isPaletteCollapsed ? (
+                <ChevronDown className="w-3.5 h-3.5 text-[#fbbf24] ml-0.5 group-hover:translate-y-0.5 transition-transform" />
+              ) : (
+                <ChevronUp className="w-3.5 h-3.5 text-slate-400 group-hover:text-[#fbbf24] ml-0.5 group-hover:-translate-y-0.5 transition-transform" />
+              )}
+            </button>
             <div className="flex items-center gap-2">
               <button
+                type="button"
+                onClick={() => setIsPaletteCollapsed((prev) => !prev)}
+                className="text-[10px] font-mono text-slate-300 hover:text-white px-2 py-0.5 rounded bg-white/5 hover:bg-white/10 border border-white/10 transition-colors cursor-pointer"
+                title={isPaletteCollapsed ? "Desplegar paleta de componentes" : "Plegar paleta de componentes"}
+              >
+                {isPaletteCollapsed ? 'Desplegar (+)' : 'Plegar (−)'}
+              </button>
+              <button
+                type="button"
                 onClick={() => setIsAhuExampleOpen(true)}
                 className="text-[10px] font-mono text-[#38bdf8] hover:text-[#7dd3fc] flex items-center gap-1 bg-[#38bdf8]/10 hover:bg-[#38bdf8]/20 px-2 py-0.5 rounded border border-[#38bdf8]/30 transition-all cursor-pointer shadow-sm"
                 title="Ver infografía con los componentes principales que componen una UTA"
@@ -2076,6 +2262,7 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
                 <span>¿Cómo se compone una UTA? (Ejemplo)</span>
               </button>
               <button
+                type="button"
                 onClick={() => handleLoadArchetype('empty_canvas')}
                 className="text-[10px] font-mono text-[#fca5a5] hover:text-[#ef4444] flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-white/5 cursor-pointer"
                 title="Vaciar la UTA para montar desde cero"
@@ -2086,40 +2273,42 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-1.5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-            {MODULE_CATALOG.map((cat) => (
-              <div
-                key={cat.type}
-                draggable={true}
-                onDragStart={(e) => handlePaletteDragStart(e, cat.type)}
-                onClick={() => insertModuleAt(cat.type, enabledModules.length)}
-                className="flex items-center gap-1.5 px-2 py-1 rounded-[5px] bg-[#1a1a1c] hover:bg-[rgba(255,255,255,0.08)] border border-[rgba(255,255,255,0.12)] hover:border-[#fbbf24] cursor-pointer active:scale-95 touch-manipulation transition-all shadow-sm group select-none relative hover:scale-[1.01]"
-                title={`${cat.title}: ${cat.description}\n(Toca para añadir o arrastra al corte)`}
-              >
-                <GripVertical className="w-3 h-3 text-slate-500 group-hover:text-[#fbbf24] shrink-0" />
-                <span
-                  className="w-2 h-2 rounded-full shrink-0 shadow-sm"
-                  style={{ backgroundColor: cat.color }}
-                />
-                <span className="text-[11px] font-medium text-white group-hover:text-[#fbbf24] whitespace-nowrap">
-                  {cat.shortName}
-                </span>
-                <span className="text-[9px] font-mono text-slate-400">
-                  ΔP:{cat.defaultDropPa}
-                </span>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    insertModuleAt(cat.type, enabledModules.length);
-                  }}
-                  className="ml-0.5 p-0.5 rounded bg-[#0a0a0c] hover:bg-[#fbbf24] hover:text-black text-slate-400 transition-colors"
-                  title={`Añadir ${cat.shortName} al final del tren`}
+          {!isPaletteCollapsed && (
+            <div className="flex flex-wrap items-center gap-1.5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden pt-0.5">
+              {MODULE_CATALOG.map((cat) => (
+                <div
+                  key={cat.type}
+                  draggable={true}
+                  onDragStart={(e) => handlePaletteDragStart(e, cat.type)}
+                  className="flex items-center gap-1.5 px-2 py-1 rounded-[5px] bg-[#1a1a1c] hover:bg-[rgba(255,255,255,0.08)] border border-[rgba(255,255,255,0.12)] hover:border-[#fbbf24] cursor-grab active:cursor-grabbing touch-manipulation transition-all shadow-sm group select-none relative hover:scale-[1.01]"
+                  title={`${cat.title}: ${cat.description}\n(Arrastra a la UTA o pulsa '+' para añadir)`}
                 >
-                  <Plus className="w-2.5 h-2.5" />
-                </button>
-              </div>
-            ))}
-          </div>
+                  <GripVertical className="w-3 h-3 text-slate-500 group-hover:text-[#fbbf24] shrink-0" />
+                  <span
+                    className="w-2 h-2 rounded-full shrink-0 shadow-sm"
+                    style={{ backgroundColor: cat.color }}
+                  />
+                  <span className="text-[11px] font-medium text-white group-hover:text-[#fbbf24] whitespace-nowrap">
+                    {cat.shortName}
+                  </span>
+                  <span className="text-[9px] font-mono text-slate-400">
+                    ΔP:{cat.defaultDropPa}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      insertModuleAt(cat.type, enabledModules.length);
+                    }}
+                    className="ml-0.5 p-0.5 rounded bg-[#0a0a0c] hover:bg-[#fbbf24] hover:text-black text-slate-400 transition-colors cursor-pointer"
+                    title={`Añadir ${cat.shortName} al final del tren`}
+                  >
+                    <Plus className="w-2.5 h-2.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -2293,14 +2482,14 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
             onTouchCancel={handleTouchEnd}
             onDoubleClick={handleZoomAll}
             style={{ touchAction: 'none' }}
-            className={`w-full relative overflow-hidden rounded-xl touch-none ${
+            className={`w-full flex-1 relative overflow-hidden rounded-xl touch-none ${
               isWhiteTheme ? 'bg-slate-100/90 border-slate-300' : 'bg-slate-950/70 border-slate-800/80'
             } border transition-all flex items-center justify-center select-none ${
               cutViewMode === 'dual'
-                ? 'min-h-[380px] h-[420px]'
-                : propertiesDetailMode === 'full'
-                ? 'min-h-[260px] h-[280px] lg:h-[300px]'
-                : 'min-h-[230px] h-[250px] lg:h-[270px]'
+                ? 'min-h-[440px] h-[520px]'
+                : isDrawerCollapsed
+                ? 'min-h-[420px] lg:min-h-[520px] flex-1'
+                : 'min-h-[320px] lg:min-h-[420px] flex-1'
             } ${
               isOverAhu ? 'border-cyan-400 ring-2 ring-cyan-500/40 shadow-2xl shadow-cyan-500/20' : ''
             } ${isDraggingCanvas ? 'cursor-grabbing' : 'cursor-grab'}`}

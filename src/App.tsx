@@ -7,6 +7,8 @@ import {
   Wind,
   Sliders,
   X,
+  ChevronRight,
+  LayoutTemplate,
 } from 'lucide-react';
 import {
   StatePoint,
@@ -34,7 +36,7 @@ import { SidebarControls } from './components/SidebarControls';
 import { PointsTable } from './components/PointsTable';
 import { ProcessesTable } from './components/ProcessesTable';
 import { ComfortView } from './components/ComfortView';
-import { HVACSchematicViewer } from './components/HVACSchematicViewer';
+import { HVACSchematicViewer, AHU_ARCHETYPES } from './components/HVACSchematicViewer';
 import { AtmosphereModal } from './components/AtmosphereModal';
 import { PresetsModal } from './components/PresetsModal';
 import { ExportModal } from './components/ExportModal';
@@ -78,6 +80,14 @@ export default function App() {
   const [isAiModalOpen, setIsAiModalOpen] = useState(false);
   const [isIdaeModalOpen, setIsIdaeModalOpen] = useState(false);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
+  const [sidebarActiveTab, setSidebarActiveTab] = useState<'points' | 'processes' | 'layers' | 'archetypes'>('points');
+  const [pendingArchetypeId, setPendingArchetypeId] = useState<string | null>(null);
+
+  const handleLoadArchetypeFromSidebar = useCallback((archetypeId: string) => {
+    setPendingArchetypeId(archetypeId);
+    setCurrentView('schematic');
+  }, []);
 
   // Initialize with the standard Summer AC Preset
   const [points, setPoints] = useState<StatePoint[]>(() => {
@@ -366,29 +376,87 @@ export default function App() {
         onOpenExportModal={() => setIsExportModalOpen(true)}
         onOpenAiAssistant={() => setIsAiModalOpen(true)}
         onOpenIdaeModal={() => setIsIdaeModalOpen(true)}
+        isSidebarCollapsed={isSidebarCollapsed}
+        onToggleSidebar={() => setIsSidebarCollapsed((prev) => !prev)}
       />
 
       {/* Main Workspace: Left Sidebar + Center Chart/Tables */}
       <div className="flex-1 flex overflow-hidden relative">
-        {/* Sidebar Controls: desktop sticky sidebar */}
-        <div className="hidden lg:flex h-full shrink-0">
-          <SidebarControls
-            points={points}
-            processes={updatedProcesses}
-            selectedPointId={selectedPointId}
-            onSelectPoint={setSelectedPointId}
-            onAddPoint={handleAddPoint}
-            onUpdatePoint={handleUpdatePoint}
-            onDeletePoint={handleDeletePoint}
-            onAddProcess={handleAddProcess}
-            onDeleteProcess={handleDeleteProcess}
-            pressure={atmosphere.pressure}
-            units={units}
-            layers={layers}
-            onToggleLayer={handleToggleLayer}
-            isolatedProcessInfo={isolatedProcessInfo}
-            onSetIsolatedProcessInfo={setIsolatedProcessInfo}
-          />
+        {/* Sidebar Controls: desktop sticky sidebar (collapsible) */}
+        <div className="hidden lg:flex h-full shrink-0 transition-all duration-200">
+          {isSidebarCollapsed ? (
+            <div className="w-11 h-full flex flex-col items-center py-4 bg-[#1a1a1c] border-r border-white/10 select-none justify-between">
+              <div className="flex flex-col items-center gap-6 w-full px-1">
+                {/* Tab 1: Puntos Psicrométricos (Rotated 180 deg) */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSidebarActiveTab('points');
+                    setIsSidebarCollapsed(false);
+                  }}
+                  className={`p-1.5 w-full flex flex-col items-center gap-2 group cursor-pointer transition-colors rounded-xl ${
+                    sidebarActiveTab === 'points'
+                      ? 'bg-[#fbbf24]/15 border border-[#fbbf24]/30'
+                      : 'hover:bg-white/5 border border-transparent'
+                  }`}
+                  title="Desplegar Puntos Psicrométricos"
+                >
+                  <ChevronRight className="w-4 h-4 text-[#fbbf24] group-hover:translate-x-0.5 transition-transform" />
+                  <span className="[writing-mode:vertical-rl] rotate-180 text-[11px] font-mono font-bold uppercase tracking-wider text-slate-300 group-hover:text-[#fbbf24] py-1">
+                    Puntos Psicrométricos ({points.length})
+                  </span>
+                </button>
+
+                <div className="w-6 h-px bg-white/10" />
+
+                {/* Tab 2: Plantillas y Arquetipos UTA (Rotated 180 deg) */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSidebarActiveTab('archetypes');
+                    setIsSidebarCollapsed(false);
+                  }}
+                  className={`p-1.5 w-full flex flex-col items-center gap-2 group cursor-pointer transition-colors rounded-xl ${
+                    sidebarActiveTab === 'archetypes'
+                      ? 'bg-[#fbbf24]/15 border border-[#fbbf24]/30'
+                      : 'hover:bg-white/5 border border-transparent'
+                  }`}
+                  title="Desplegar Plantillas y Arquetipos de UTA"
+                >
+                  <LayoutTemplate className="w-4 h-4 text-[#fbbf24] group-hover:scale-110 transition-transform" />
+                  <span className="[writing-mode:vertical-rl] rotate-180 text-[11px] font-mono font-bold uppercase tracking-wider text-slate-300 group-hover:text-[#fbbf24] py-1">
+                    Plantillas UTA ({AHU_ARCHETYPES.length - 1})
+                  </span>
+                </button>
+              </div>
+
+              <div className="flex flex-col items-center gap-2 pb-2">
+                <span className="w-2 h-2 rounded-full bg-[#fbbf24] animate-pulse" title="Sistema activo" />
+              </div>
+            </div>
+          ) : (
+            <SidebarControls
+              points={points}
+              processes={updatedProcesses}
+              selectedPointId={selectedPointId}
+              onSelectPoint={setSelectedPointId}
+              onAddPoint={handleAddPoint}
+              onUpdatePoint={handleUpdatePoint}
+              onDeletePoint={handleDeletePoint}
+              onAddProcess={handleAddProcess}
+              onDeleteProcess={handleDeleteProcess}
+              pressure={atmosphere.pressure}
+              units={units}
+              layers={layers}
+              onToggleLayer={handleToggleLayer}
+              isolatedProcessInfo={isolatedProcessInfo}
+              onSetIsolatedProcessInfo={setIsolatedProcessInfo}
+              onToggleCollapse={() => setIsSidebarCollapsed(true)}
+              activeTab={sidebarActiveTab}
+              onTabChange={setSidebarActiveTab}
+              onLoadArchetype={handleLoadArchetypeFromSidebar}
+            />
+          )}
         </div>
 
         {/* Dynamic Main Stage View with responsive padding for mobile bottom bar */}
@@ -491,6 +559,12 @@ export default function App() {
               onNavigateToView={(v) => setCurrentView(v)}
               isolatedProcessInfo={isolatedProcessInfo}
               onSetIsolatedProcessInfo={setIsolatedProcessInfo}
+              pendingArchetypeId={pendingArchetypeId}
+              onClearPendingArchetype={() => setPendingArchetypeId(null)}
+              onOpenArchetypesSidebar={() => {
+                setSidebarActiveTab('archetypes');
+                setIsSidebarCollapsed(false);
+              }}
             />
           )}
         </main>
