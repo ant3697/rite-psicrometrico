@@ -30,12 +30,12 @@ import {
   UNE_EN_16798_CAT3_WINTER,
 } from '../utils/psychrolib';
 import {
-  computeSaturationEnthalpyTicks,
   computeEnthalpyDeviations,
   ASHRAE_SHR_VALUES,
   getSlopeFromSHR,
 } from '../utils/ashraeScales';
-import { ASHRAEProtractor } from './ASHRAEProtractor';
+import { FlyCarpetCarrierDiagram } from './FlyCarpetCarrierDiagram';
+import { FlyCarpetMollierDiagram } from './FlyCarpetMollierDiagram';
 import {
   ZoomIn,
   ZoomOut,
@@ -155,9 +155,9 @@ interface PlacedProcessLabel {
 // Standard full psychrometric domain limits
 const DEFAULT_BOUNDS: ChartBounds = {
   tdbMin: -10,
-  tdbMax: 55,
+  tdbMax: 50,
   wMin: 0,
-  wMax: 0.033, // 33 g/kg
+  wMax: 0.030, // 30 g/kg (matches exact scale of FlyCarpet SVG)
 };
 
 export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
@@ -185,8 +185,8 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
   const svgRef = useRef<SVGSVGElement | null>(null);
 
   // SVG Canvas dimensions tightly tailored to fill window
-  const viewBoxWidth = 1200;
-  const viewBoxHeight = 740;
+  const viewBoxWidth = 902;
+  const viewBoxHeight = 652;
 
   // Toggle to dim rather than completely hide non-isolated cycle points/processes
   const [dimOtherProcesses, setDimOtherProcesses] = useState<boolean>(false);
@@ -291,18 +291,45 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
   const [bounds, setBounds] = useState<ChartBounds>(DEFAULT_BOUNDS);
 
   // Optimized margins giving clean clearance for official ASHRAE outer enthalpy scale and FCS scale
-  const margin = useMemo(
-    () => ({
-      top: 36,    // Clearance for top perimeter enthalpy scale
-      right: showProtractor && chartType === 'carrier' ? 142 : 72, // Generous clearance strictly separating W and FCS/SHR scales
-      bottom: 46, // Space for Dry Bulb Temp scale Tbs and tick numbers
-      left: 52,   // Space for -10 tick and outer saturation enthalpy scale
-    }),
-    [showProtractor, chartType]
-  );
+  const margin = useMemo(() => {
+    if (chartType === 'mollier') {
+      return {
+        top: 51,
+        right: 72,
+        bottom: 62,
+        left: 70,
+      };
+    }
+    return {
+      top: 50,
+      right: 73,
+      bottom: 62,
+      left: 70,
+    };
+  }, [chartType]);
 
   const plotWidth = viewBoxWidth - margin.left - margin.right;
   const plotHeight = viewBoxHeight - margin.top - margin.bottom;
+
+  const innerPlotTransform = useMemo(() => {
+    if (chartType === 'mollier') {
+      const scaleX = 0.030 / (bounds.wMax - bounds.wMin);
+      const scaleY = 60.0 / (bounds.tdbMax - bounds.tdbMin);
+      const transX = margin.left - scaleX * margin.left - (bounds.wMin / (bounds.wMax - bounds.wMin)) * plotWidth;
+      const transY = (margin.top + plotHeight) - scaleY * (margin.top + plotHeight) + ((bounds.tdbMin - (-10.0)) / (bounds.tdbMax - bounds.tdbMin)) * plotHeight;
+      return `matrix(${scaleX.toFixed(6)}, 0, 0, ${scaleY.toFixed(6)}, ${transX.toFixed(4)}, ${transY.toFixed(4)})`;
+    } else {
+      const scaleX = 60.0 / (bounds.tdbMax - bounds.tdbMin);
+      const scaleY = 0.030 / (bounds.wMax - bounds.wMin);
+      const transX = margin.left - scaleX * margin.left - ((bounds.tdbMin - (-10.0)) / (bounds.tdbMax - bounds.tdbMin)) * plotWidth;
+      const transY = (margin.top + plotHeight) - scaleY * (margin.top + plotHeight) + (bounds.wMin / (bounds.wMax - bounds.wMin)) * plotHeight;
+      return `matrix(${scaleX.toFixed(6)}, 0, 0, ${scaleY.toFixed(6)}, ${transX.toFixed(4)}, ${transY.toFixed(4)})`;
+    }
+  }, [chartType, bounds, margin.left, margin.top, plotWidth, plotHeight]);
+
+  useEffect(() => {
+    setBounds(DEFAULT_BOUNDS);
+  }, [chartType]);
 
   // Pan & Drag state
   const [isPanning, setIsPanning] = useState(false);
@@ -355,19 +382,16 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
     [bounds, margin.left, margin.top, plotWidth, plotHeight]
   );
 
-  // Coordinate mapping: Mollier h-x Diagram
+  // Coordinate mapping: Mollier h-x Diagram (Horizontal: W 0-30 g/kg, Vertical: Tdb -10 to 50 °C)
   const coordToPixelMollier = useCallback(
     (tdb: number, w: number): [number, number] => {
-      const h = getEnthalpy(tdb, w);
-      const hMin = -10;
-      const hMax = 140;
       const px =
         margin.left +
         ((w - bounds.wMin) / (bounds.wMax - bounds.wMin)) * plotWidth;
       const py =
         margin.top +
         plotHeight -
-        ((h - hMin) / (hMax - hMin)) * plotHeight;
+        ((tdb - bounds.tdbMin) / (bounds.tdbMax - bounds.tdbMin)) * plotHeight;
       return [px, py];
     },
     [bounds, margin.left, margin.top, plotWidth, plotHeight]
@@ -378,12 +402,9 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
       const w =
         bounds.wMin +
         ((px - margin.left) / plotWidth) * (bounds.wMax - bounds.wMin);
-      const hMin = -10;
-      const hMax = 140;
-      const h =
-        hMin +
-        ((margin.top + plotHeight - py) / plotHeight) * (hMax - hMin);
-      const tdb = (h - 2501 * w) / (1.006 + 1.86 * w);
+      const tdb =
+        bounds.tdbMin +
+        ((margin.top + plotHeight - py) / plotHeight) * (bounds.tdbMax - bounds.tdbMin);
       return [tdb, w];
     },
     [bounds, margin.left, margin.top, plotWidth, plotHeight]
@@ -415,24 +436,26 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
     const spanW = (bounds.wMax - bounds.wMin) * 0.8;
     const midT = (bounds.tdbMin + bounds.tdbMax) / 2;
     const midW = (bounds.wMin + bounds.wMax) / 2;
+    const newWMin = Math.max(0, midW - spanW / 2);
     setBounds({
       tdbMin: Number((midT - spanT / 2).toFixed(2)),
       tdbMax: Number((midT + spanT / 2).toFixed(2)),
-      wMin: Number(Math.max(0, midW - spanW / 2).toFixed(5)),
-      wMax: Number((midW + spanW / 2).toFixed(5)),
+      wMin: Number(newWMin.toFixed(5)),
+      wMax: Number((newWMin + spanW).toFixed(5)),
     });
   };
 
   const handleZoomOut = () => {
-    const spanT = Math.min(90, (bounds.tdbMax - bounds.tdbMin) * 1.25);
-    const spanW = Math.min(0.05, (bounds.wMax - bounds.wMin) * 1.25);
+    const spanT = Math.min(120, (bounds.tdbMax - bounds.tdbMin) * 1.25);
+    const spanW = Math.min(0.08, (bounds.wMax - bounds.wMin) * 1.25);
     const midT = (bounds.tdbMin + bounds.tdbMax) / 2;
     const midW = (bounds.wMin + bounds.wMax) / 2;
+    const newWMin = Math.max(0, midW - spanW / 2);
     setBounds({
       tdbMin: Number((midT - spanT / 2).toFixed(2)),
       tdbMax: Number((midT + spanT / 2).toFixed(2)),
-      wMin: Number(Math.max(0, midW - spanW / 2).toFixed(5)),
-      wMax: Number((midW + spanW / 2).toFixed(5)),
+      wMin: Number(newWMin.toFixed(5)),
+      wMax: Number((newWMin + spanW).toFixed(5)),
     });
   };
 
@@ -451,11 +474,14 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
     const marginT = Math.max(5, (maxT - minT) * 0.25);
     const marginW = Math.max(0.003, (maxW - minW) * 0.25);
 
+    const newWMin = Math.max(0, minW - marginW);
+    const spanW = Math.max(0.005, maxW + marginW - newWMin);
+
     setBounds({
       tdbMin: Number((minT - marginT).toFixed(1)),
       tdbMax: Number((maxT + marginT).toFixed(1)),
-      wMin: Number(Math.max(0, minW - marginW).toFixed(5)),
-      wMax: Number((maxW + marginW).toFixed(5)),
+      wMin: Number(newWMin.toFixed(5)),
+      wMax: Number((newWMin + spanW).toFixed(5)),
     });
   };
 
@@ -467,11 +493,12 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
     const centerW = (Math.min(...wVals) + Math.max(...wVals)) / 2;
     const spanT = bounds.tdbMax - bounds.tdbMin;
     const spanW = bounds.wMax - bounds.wMin;
+    const newWMin = Math.max(0, centerW - spanW / 2);
     setBounds({
       tdbMin: Number((centerT - spanT / 2).toFixed(2)),
       tdbMax: Number((centerT + spanT / 2).toFixed(2)),
-      wMin: Number(Math.max(0, centerW - spanW / 2).toFixed(5)),
-      wMax: Number((centerW + spanW / 2).toFixed(5)),
+      wMin: Number(newWMin.toFixed(5)),
+      wMax: Number((newWMin + spanW).toFixed(5)),
     });
   };
 
@@ -506,7 +533,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
   );
 
   // Non-passive wheel zoom listener attached directly to SVG canvas
-  // This completely eliminates browser passive intervention errors and stops page scroll in all views
+  // Accurately supports both Carrier (X=T, Y=W) and Mollier (X=W, Y=T)
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return;
@@ -516,33 +543,56 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
       e.stopPropagation();
 
       const { x: rawPx, y: rawPy } = getSvgCursorPoint(e);
-      const normX = Math.max(0, Math.min(1, (rawPx - margin.left) / plotWidth));
-      const normY = Math.max(0, Math.min(1, (margin.top + plotHeight - rawPy) / plotHeight));
-
-      const factor = e.deltaY < 0 ? 0.88 : 1.14;
+      const factor = e.deltaY < 0 ? 0.85 : 1.18;
 
       const spanT = bounds.tdbMax - bounds.tdbMin;
       const spanW = bounds.wMax - bounds.wMin;
 
-      const newSpanT = Math.min(90, Math.max(6, spanT * factor));
-      const newSpanW = Math.min(0.05, Math.max(0.002, spanW * factor));
+      const newSpanT = Math.min(120, Math.max(4, spanT * factor));
+      const newSpanW = Math.min(0.08, Math.max(0.001, spanW * factor));
 
-      const cursorT = bounds.tdbMin + normX * spanT;
-      const cursorW = bounds.wMin + normY * spanW;
+      if (chartType === 'mollier') {
+        // Mollier: X axis is Humidity Ratio W (0 to 30 g/kg), Y axis is Temperature Tbs (-10 to 50 °C)
+        const normW = Math.max(0, Math.min(1, (rawPx - margin.left) / plotWidth));
+        const normT = Math.max(0, Math.min(1, (margin.top + plotHeight - rawPy) / plotHeight));
 
-      setBounds({
-        tdbMin: Number((cursorT - normX * newSpanT).toFixed(2)),
-        tdbMax: Number((cursorT + (1 - normX) * newSpanT).toFixed(2)),
-        wMin: Number(Math.max(0, cursorW - normY * newSpanW).toFixed(5)),
-        wMax: Number((cursorW + (1 - normY) * newSpanW).toFixed(5)),
-      });
+        const cursorT = bounds.tdbMin + normT * spanT;
+        const cursorW = bounds.wMin + normW * spanW;
+
+        const newTMin = cursorT - normT * newSpanT;
+        const newWMin = Math.max(0, cursorW - normW * newSpanW);
+
+        setBounds({
+          tdbMin: Number(newTMin.toFixed(2)),
+          tdbMax: Number((newTMin + newSpanT).toFixed(2)),
+          wMin: Number(newWMin.toFixed(5)),
+          wMax: Number((newWMin + newSpanW).toFixed(5)),
+        });
+      } else {
+        // Carrier: X axis is Temperature Tbs (-10 to 50 °C), Y axis is Humidity Ratio W (0 to 30 g/kg)
+        const normX = Math.max(0, Math.min(1, (rawPx - margin.left) / plotWidth));
+        const normY = Math.max(0, Math.min(1, (margin.top + plotHeight - rawPy) / plotHeight));
+
+        const cursorT = bounds.tdbMin + normX * spanT;
+        const cursorW = bounds.wMin + normY * spanW;
+
+        const newTMin = cursorT - normX * newSpanT;
+        const newWMin = Math.max(0, cursorW - normY * newSpanW);
+
+        setBounds({
+          tdbMin: Number(newTMin.toFixed(2)),
+          tdbMax: Number((newTMin + newSpanT).toFixed(2)),
+          wMin: Number(newWMin.toFixed(5)),
+          wMax: Number((newWMin + newSpanW).toFixed(5)),
+        });
+      }
     };
 
     svg.addEventListener('wheel', onWheelNative, { passive: false });
     return () => {
       svg.removeEventListener('wheel', onWheelNative);
     };
-  }, [bounds, margin, plotWidth, plotHeight, getSvgCursorPoint]);
+  }, [bounds, margin, plotWidth, plotHeight, getSvgCursorPoint, chartType]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
     if (draggedPointId) return;
@@ -578,15 +628,35 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
       const spanT = panStartRef.current.bounds.tdbMax - panStartRef.current.bounds.tdbMin;
       const spanW = panStartRef.current.bounds.wMax - panStartRef.current.bounds.wMin;
 
-      const deltaT = -(dx / plotPixelWidth) * spanT;
-      const deltaW = (dy / plotPixelHeight) * spanW;
+      if (chartType === 'mollier') {
+        // In Mollier: Horizontal pan (dx) affects W, Vertical pan (dy) affects Tbs
+        const deltaW = -(dx / plotPixelWidth) * spanW;
+        const deltaT = (dy / plotPixelHeight) * spanT;
 
-      setBounds({
-        tdbMin: Number((panStartRef.current.bounds.tdbMin + deltaT).toFixed(2)),
-        tdbMax: Number((panStartRef.current.bounds.tdbMax + deltaT).toFixed(2)),
-        wMin: Number(Math.max(0, panStartRef.current.bounds.wMin + deltaW).toFixed(5)),
-        wMax: Number((panStartRef.current.bounds.wMax + deltaW).toFixed(5)),
-      });
+        const newWMin = Math.max(0, panStartRef.current.bounds.wMin + deltaW);
+        const newTMin = panStartRef.current.bounds.tdbMin + deltaT;
+
+        setBounds({
+          tdbMin: Number(newTMin.toFixed(2)),
+          tdbMax: Number((newTMin + spanT).toFixed(2)),
+          wMin: Number(newWMin.toFixed(5)),
+          wMax: Number((newWMin + spanW).toFixed(5)),
+        });
+      } else {
+        // In Carrier: Horizontal pan (dx) affects Tbs, Vertical pan (dy) affects W
+        const deltaT = -(dx / plotPixelWidth) * spanT;
+        const deltaW = (dy / plotPixelHeight) * spanW;
+
+        const newTMin = panStartRef.current.bounds.tdbMin + deltaT;
+        const newWMin = Math.max(0, panStartRef.current.bounds.wMin + deltaW);
+
+        setBounds({
+          tdbMin: Number(newTMin.toFixed(2)),
+          tdbMax: Number((newTMin + spanT).toFixed(2)),
+          wMin: Number(newWMin.toFixed(5)),
+          wMax: Number((newWMin + spanW).toFixed(5)),
+        });
+      }
       return;
     }
 
@@ -684,15 +754,33 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
       const spanT = chartTouchStartRef.current.bounds.tdbMax - chartTouchStartRef.current.bounds.tdbMin;
       const spanW = chartTouchStartRef.current.bounds.wMax - chartTouchStartRef.current.bounds.wMin;
 
-      const deltaT = -(dx / plotPixelWidth) * spanT;
-      const deltaW = (dy / plotPixelHeight) * spanW;
+      if (chartType === 'mollier') {
+        const deltaW = -(dx / plotPixelWidth) * spanW;
+        const deltaT = (dy / plotPixelHeight) * spanT;
 
-      setBounds({
-        tdbMin: Number((chartTouchStartRef.current.bounds.tdbMin + deltaT).toFixed(2)),
-        tdbMax: Number((chartTouchStartRef.current.bounds.tdbMax + deltaT).toFixed(2)),
-        wMin: Number(Math.max(0, chartTouchStartRef.current.bounds.wMin + deltaW).toFixed(5)),
-        wMax: Number((chartTouchStartRef.current.bounds.wMax + deltaW).toFixed(5)),
-      });
+        const newWMin = Math.max(0, chartTouchStartRef.current.bounds.wMin + deltaW);
+        const newTMin = chartTouchStartRef.current.bounds.tdbMin + deltaT;
+
+        setBounds({
+          tdbMin: Number(newTMin.toFixed(2)),
+          tdbMax: Number((newTMin + spanT).toFixed(2)),
+          wMin: Number(newWMin.toFixed(5)),
+          wMax: Number((newWMin + spanW).toFixed(5)),
+        });
+      } else {
+        const deltaT = -(dx / plotPixelWidth) * spanT;
+        const deltaW = (dy / plotPixelHeight) * spanW;
+
+        const newTMin = chartTouchStartRef.current.bounds.tdbMin + deltaT;
+        const newWMin = Math.max(0, chartTouchStartRef.current.bounds.wMin + deltaW);
+
+        setBounds({
+          tdbMin: Number(newTMin.toFixed(2)),
+          tdbMax: Number((newTMin + spanT).toFixed(2)),
+          wMin: Number(newWMin.toFixed(5)),
+          wMax: Number((newWMin + spanW).toFixed(5)),
+        });
+      }
     } else if (e.touches.length === 2 && chartTouchStartRef.current.distance > 0) {
       const t0 = e.touches[0];
       const t1 = e.touches[1];
@@ -706,14 +794,15 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
       const midT = (initBounds.tdbMin + initBounds.tdbMax) / 2;
       const midW = (initBounds.wMin + initBounds.wMax) / 2;
 
-      const newSpanT = Math.min(90, Math.max(6, spanT * scaleFactor));
-      const newSpanW = Math.min(0.05, Math.max(0.002, spanW * scaleFactor));
+      const newSpanT = Math.min(120, Math.max(4, spanT * scaleFactor));
+      const newSpanW = Math.min(0.08, Math.max(0.001, spanW * scaleFactor));
+      const newWMin = Math.max(0, midW - newSpanW / 2);
 
       setBounds({
         tdbMin: Number((midT - newSpanT / 2).toFixed(2)),
         tdbMax: Number((midT + newSpanT / 2).toFixed(2)),
-        wMin: Number(Math.max(0, midW - newSpanW / 2).toFixed(5)),
-        wMax: Number((midW + newSpanW / 2).toFixed(5)),
+        wMin: Number(newWMin.toFixed(5)),
+        wMax: Number((newWMin + newSpanW).toFixed(5)),
       });
     }
   };
@@ -751,25 +840,28 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
     }
   };
 
-  // ---------------- DYNAMIC AXES TICKS GENERATION ----------------
+  // ---------------- DYNAMIC AXES TICKS GENERATION -----------------
   const xTicks = useMemo(() => {
     const span = bounds.tdbMax - bounds.tdbMin;
-    const step = span > 50 ? 10 : span > 25 ? 5 : span > 12 ? 2 : 1;
+    const step = span > 35 ? 5 : span > 15 ? 2 : span > 7 ? 1 : span > 3 ? 0.5 : 0.2;
     const start = Math.ceil(bounds.tdbMin / step) * step;
     const ticks: number[] = [];
-    for (let t = start; t <= bounds.tdbMax; t += step) {
-      ticks.push(t);
+    for (let t = start; t <= bounds.tdbMax + 1e-6; t += step) {
+      ticks.push(Number(t.toFixed(2)));
     }
     return ticks;
   }, [bounds.tdbMin, bounds.tdbMax]);
 
   const yTicks = useMemo(() => {
-    const span = bounds.wMax - bounds.wMin;
-    const step = span > 0.02 ? 0.005 : span > 0.01 ? 0.002 : span > 0.004 ? 0.001 : 0.0005;
-    const start = Math.max(0, Math.ceil(bounds.wMin / step) * step);
+    // Humidity ratio in g/kg
+    const wMinG = bounds.wMin * 1000;
+    const wMaxG = bounds.wMax * 1000;
+    const spanG = wMaxG - wMinG;
+    const stepG = spanG > 18 ? 1 : spanG > 8 ? 0.5 : spanG > 3 ? 0.2 : 0.1;
+    const startG = Math.max(0, Math.ceil(wMinG / stepG) * stepG);
     const ticks: number[] = [];
-    for (let w = start; w <= bounds.wMax; w += step) {
-      ticks.push(Number(w.toFixed(5)));
+    for (let wG = startG; wG <= wMaxG + 1e-6; wG += stepG) {
+      ticks.push(Number(wG.toFixed(2)));
     }
     return ticks;
   }, [bounds.wMin, bounds.wMax]);
@@ -1071,52 +1163,10 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
     }
   }, [chartTheme]);
 
-  // Saturated Enthalpy Ticks along the 100% RH boundary and top margin
-  const satEnthalpyTicks = useMemo(() => {
-    return computeSaturationEnthalpyTicks(pressure, bounds.tdbMin, bounds.tdbMax, bounds.wMax);
-  }, [pressure, bounds.tdbMin, bounds.tdbMax, bounds.wMax]);
-
   // Enthalpy Deviation Curves (curvas de desviación entálpica)
   const enthalpyDeviations = useMemo(() => {
     return computeEnthalpyDeviations(pressure, bounds.tdbMin, bounds.tdbMax, bounds.wMin, bounds.wMax);
   }, [pressure, bounds.tdbMin, bounds.tdbMax, bounds.wMin, bounds.wMax]);
-
-  // Saturation Line Wet-Bulb Temperature Ticks
-  const satTempTicks = useMemo(() => {
-    const temps = [-10, -5, 0, 5, 10, 15, 20, 25, 30, 35];
-    return temps
-      .filter((t) => t >= bounds.tdbMin && t <= bounds.tdbMax)
-      .map((t) => {
-        const ws = getSaturationHumidityRatio(t, pressure);
-        if (ws > bounds.wMax) return null;
-        const [px, py] = coordToPixel(t, ws);
-        return { t, px, py };
-      })
-      .filter(Boolean) as Array<{ t: number; px: number; py: number }>;
-  }, [bounds.tdbMin, bounds.tdbMax, bounds.wMax, coordToPixel, pressure]);
-
-  // Sensible Heat Factor (SHF / FCS) scale on the far right vertical border (Images 1 and 2)
-  const shfScaleTicks = useMemo(() => {
-    const values = [0.00, 0.20, 0.30, 0.36, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 1.00];
-    const tRef = 24.0;
-    const wRef = getWFromTdbRh(tRef, 50, pressure);
-    const tMax = bounds.tdbMax;
-    const deltaT = tMax - tRef;
-
-    return values.map((shr) => {
-      const dWdT = getSlopeFromSHR(shr);
-      const wIntersect = wRef + dWdT * deltaT;
-      const [, py] = coordToPixel(tMax, wIntersect);
-      const isMajor = [0.00, 0.20, 0.36, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90, 1.00].includes(shr);
-      return {
-        shr,
-        label: shr === 1.0 ? '1.00' : shr === 0.0 ? '0.0' : shr.toFixed(2),
-        py,
-        isMajor,
-        inRange: py >= margin.top - 5 && py <= margin.top + plotHeight + 5,
-      };
-    });
-  }, [bounds.tdbMax, coordToPixel, margin.top, plotHeight, pressure]);
 
   // Deduplicate points: remove duplicate IDs or coincident points with identical name/coords
   const deduplicatedPoints = useMemo(() => {
@@ -1803,120 +1853,23 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
           </filter>
         </defs>
 
-        {/* 1. Fixed Plot Background Rectangle (Anchored tightly to window) */}
-        <rect
-          x={margin.left}
-          y={margin.top}
-          width={plotWidth}
-          height={plotHeight}
-          fill={themeStyles.plotBg}
-          stroke={themeStyles.frameStroke}
-          strokeWidth="1.5"
-        />
+        {/* 1. Official High-Precision Vector Diagram (Carrier / Mollier) from FlyCarpet dataset */}
+        {chartType === 'mollier' ? (
+          <FlyCarpetMollierDiagram
+            layers={{ ...layers, shrProtractor: showProtractor }}
+            isDark={themeStyles.isDark}
+            innerPlotTransform={innerPlotTransform}
+          />
+        ) : (
+          <FlyCarpetCarrierDiagram
+            layers={{ ...layers, shrProtractor: showProtractor }}
+            isDark={themeStyles.isDark}
+            innerPlotTransform={innerPlotTransform}
+          />
+        )}
 
-        {/* 2. Diagram Contents (Scaled & Panned strictly inside plot area) */}
+        {/* 2. Interactive Diagram Contents (Scaled & Panned strictly inside plot area) */}
         <g clipPath="url(#chart-plot-clip)">
-          {/* Grid lines: Dry-bulb Temperature vertical lines */}
-          {layers.grid && (
-            <g className="grid-tdb" strokeWidth="0.8">
-              {xTicks.map((t) => {
-                const [x1] = coordToPixel(t, bounds.wMin);
-                const isMajor = t % 10 === 0;
-                return (
-                  <line
-                    key={`grid-t-${t}`}
-                    x1={x1}
-                    y1={margin.top}
-                    x2={x1}
-                    y2={margin.top + plotHeight}
-                    stroke={isMajor ? themeStyles.gridTdbMajor : themeStyles.gridTdbMinor}
-                    strokeDasharray={isMajor ? undefined : '2,4'}
-                  />
-                );
-              })}
-            </g>
-          )}
-
-          {/* Grid lines: Humidity Ratio horizontal lines */}
-          {layers.grid && (
-            <g className="grid-w" strokeWidth="0.8">
-              {yTicks.map((w) => {
-                const [, y1] = coordToPixel(bounds.tdbMin, w);
-                const isMajor = Math.round(w * 1000) % 5 === 0;
-                return (
-                  <line
-                    key={`grid-w-${w}`}
-                    x1={margin.left}
-                    y1={y1}
-                    x2={margin.left + plotWidth}
-                    y2={y1}
-                    stroke={isMajor ? themeStyles.gridWMajor : themeStyles.gridWMinor}
-                    strokeDasharray={isMajor ? undefined : '2,4'}
-                  />
-                );
-              })}
-            </g>
-          )}
-
-          {/* Specific Volume Lines (v) */}
-          {layers.volumeLines && (
-            <g className="volume-lines" stroke={themeStyles.volumeStroke} strokeWidth={themeStyles.volumeWidth} strokeDasharray={themeStyles.volumeDash}>
-              {chartCurves.volumeLines.map(({ v, path }) => (
-                <path key={`v-${v}`} d={path} fill="none" opacity="0.65" />
-              ))}
-            </g>
-          )}
-
-          {/* Specific Enthalpy Lines (h) */}
-          {layers.enthalpyLines && (
-            <g className="enthalpy-lines" stroke={themeStyles.enthalpyStroke} strokeWidth={themeStyles.enthalpyWidth}>
-              {chartCurves.enthalpyLines.map(({ h, path }) => (
-                <path key={`h-${h}`} d={path} fill="none" opacity="0.55" />
-              ))}
-            </g>
-          )}
-
-          {/* Wet Bulb Lines (Twb) */}
-          {layers.twbLines && (
-            <g className="twb-lines" stroke={themeStyles.twbStroke} strokeWidth={themeStyles.twbWidth} strokeDasharray={themeStyles.twbDash}>
-              {chartCurves.twbLines.map(({ twb, path }) => (
-                <path key={`twb-${twb}`} d={path} fill="none" opacity="0.75" />
-              ))}
-            </g>
-          )}
-
-          {/* Enthalpy Deviation Lines (Curvas de Desviación de Entalpía ASHRAE) */}
-          {showEnthalpyDeviations && (
-            <g className="enthalpy-deviation-lines">
-              {enthalpyDeviations.map(({ deviation, points: pts }) => {
-                if (pts.length < 2) return null;
-                const pixelPts = pts.map((p) => coordToPixel(p.tdb, p.w));
-                const pathD = `M ${pixelPts.map((p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' L ')}`;
-                const midPt = pixelPts[Math.floor(pixelPts.length * 0.45)];
-                return (
-                  <g key={`dev-${deviation}`}>
-                    <path
-                      d={pathD}
-                      fill="none"
-                      stroke={themeStyles.deviationStroke}
-                      strokeWidth="1.1"
-                      strokeDasharray="4,3"
-                      opacity="0.85"
-                    />
-                    {midPt && (
-                      <g transform={`translate(${midPt[0]}, ${midPt[1]})`}>
-                        <rect x="-14" y="-7" width="28" height="13" rx="3" fill={themeStyles.plotBg} stroke={themeStyles.deviationStroke} strokeWidth="0.8" opacity="0.9" />
-                        <text x="0" y="2.5" textAnchor="middle" fill={themeStyles.deviationStroke} fontSize="7.5" fontWeight="bold" fontFamily="Fira Code, monospace">
-                          {deviation.toFixed(1)}
-                        </text>
-                      </g>
-                    )}
-                  </g>
-                );
-              })}
-            </g>
-          )}
-
           {/* Comfort Zones: ASHRAE 55 */}
           {layers.comfortSummer && (
             <polygon
@@ -1968,55 +1921,6 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
             />
           )}
 
-          {/* Relative Humidity Curves (10% to 90%) */}
-          {layers.rhCurves && (
-            <g className="rh-curves" stroke={themeStyles.rhStroke}>
-              {chartCurves.rhCurves.map(({ rh, path }) => (
-                <g key={`rh-${rh}`}>
-                  <path
-                    d={path}
-                    fill="none"
-                    opacity={rh === 50 ? 0.95 : 0.65}
-                    strokeWidth={rh === 50 ? themeStyles.rhMajorWidth : themeStyles.rhMinorWidth}
-                  />
-                </g>
-              ))}
-            </g>
-          )}
-
-          {/* Saturation Curve (RH = 100%) */}
-          <path
-            d={chartCurves.satPath}
-            fill="none"
-            stroke={themeStyles.satStroke}
-            strokeWidth={themeStyles.satWidth}
-            filter={themeStyles.isDark ? 'url(#glow)' : undefined}
-          />
-
-          {/* Saturation Line Wet-Bulb Temperature Graduations */}
-          <g className="sat-temp-ticks pointer-events-none">
-            {satTempTicks.map(({ t, px, py }) => {
-              const displayVal = units === 'IP' ? UnitConvert.cToF(t).toFixed(0) : t;
-              return (
-                <g key={`sat-temp-${t}`} transform={`translate(${px}, ${py})`}>
-                  <line x1="-5" y1="-5" x2="3" y2="3" stroke={themeStyles.satStroke} strokeWidth="1.2" />
-                  <text
-                    x="-8"
-                    y="-4"
-                    textAnchor="end"
-                    fill={themeStyles.axisText}
-                    fontSize="8"
-                    fontWeight="bold"
-                    fontFamily="Fira Code, monospace"
-                  >
-                    {displayVal}°
-                  </text>
-                </g>
-              );
-            })}
-          </g>
-
-          {/* Processes lines layer */}
           {layers.processes && (
             <g className="processes-layer">
               {processes.map((proc) => {
@@ -2461,225 +2365,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
               })}
           </g>
 
-          {/* Official ASHRAE / Valcon Title Block inside plot in upper left */}
-          {(chartTheme === 'ashrae_classic' || chartTheme === 'valcon_color') && (
-            <g className="official-title-block pointer-events-none" transform={`translate(${margin.left + 16}, ${margin.top + 14})`}>
-              <rect
-                x="0"
-                y="0"
-                width="220"
-                height="46"
-                rx="4"
-                fill={themeStyles.canvasBg}
-                stroke={themeStyles.frameStroke}
-                strokeWidth="1"
-                opacity="0.94"
-              />
-              <text x="12" y="14" fill={themeStyles.titleColor} fontSize="10" fontWeight="bold" fontFamily="Roboto Condensed, sans-serif" letterSpacing="0.4">
-                ASHRAE PSYCHROMETRIC CHART NO. 1
-              </text>
-              <text x="12" y="26" fill={themeStyles.axisText} fontSize="7.8" fontWeight="600" fontFamily="Roboto Condensed, sans-serif">
-                NORMAL TEMPERATURE · SI UNITS · 101.325 kPa (NIVEL DEL MAR)
-              </text>
-              <text x="12" y="37" fill={themeStyles.axisText} fontSize="6.8" fontFamily="Roboto Condensed, sans-serif" opacity="0.8">
-                BAROMÉTRICA: {pressure.toFixed(3)} kPa · ASHRAE FUNDAMENTALS 2021
-              </text>
-            </g>
-          )}
-
-          {/* Interactive Official ASHRAE Protractor in Top-Left Area (Cleanly spaced below title block) */}
-          {showProtractor && chartType === 'carrier' && (
-            <ASHRAEProtractor
-              x0={margin.left + 230}
-              y0={margin.top + 124}
-              radius={72}
-              plotWidth={plotWidth}
-              plotHeight={plotHeight}
-              spanT={bounds.tdbMax - bounds.tdbMin}
-              spanW={bounds.wMax - bounds.wMin}
-              pressure={pressure}
-              theme={chartTheme}
-              units={units}
-              activeSHR={selectedSHR}
-              onSelectSHR={(shr) => setSelectedSHR(shr)}
-              coordToPixel={coordToPixel}
-              selectedPoint={points.find((p) => p.id === selectedPointId) || null}
-            />
-          )}
-
-          {/* Ray line from ASHRAE Reference Point to right SHF Scale when selected */}
-          {selectedSHR !== null && (() => {
-            const tRef = 24.0;
-            const wRef = getWFromTdbRh(tRef, 50, pressure);
-            const [rx, ry] = coordToPixel(tRef, wRef);
-            const dWdT = getSlopeFromSHR(selectedSHR);
-            const deltaT = bounds.tdbMax - tRef;
-            const wTarget = wRef + dWdT * deltaT;
-            const [tx, ty] = coordToPixel(bounds.tdbMax, wTarget);
-            const shrLineX = margin.left + plotWidth + 76;
-
-            return (
-              <g className="shf-reference-ray pointer-events-none">
-                <line
-                  x1={rx}
-                  y1={ry}
-                  x2={tx}
-                  y2={ty}
-                  stroke="#F59E0B"
-                  strokeWidth="1.6"
-                  strokeDasharray="4,2"
-                />
-                <line
-                  x1={tx}
-                  y1={ty}
-                  x2={shrLineX}
-                  y2={ty}
-                  stroke="#F59E0B"
-                  strokeWidth="1.2"
-                  strokeDasharray="2,2"
-                  opacity="0.85"
-                />
-                <circle cx={tx} cy={ty} r="2.5" fill="#F59E0B" />
-                <circle cx={shrLineX} cy={ty} r="3.5" fill="#F59E0B" />
-              </g>
-            );
-          })()}
         </g>
-
-        {/* Outer Perimeter Enthalpy Scale (Escala Perimetral de Entalpía ASHRAE) */}
-        <g className="perimeter-enthalpy-scale pointer-events-none">
-          {satEnthalpyTicks.map((tick) => {
-            const [px, py] = coordToPixel(tick.tdbSat, tick.wSat);
-            const len = tick.isMajor ? 10 : 5;
-            
-            // Collinear outward extension along constant enthalpy line
-            // dw/dt ≈ -0.000405 kg/kg per °C
-            const scaleX = plotWidth / (bounds.tdbMax - bounds.tdbMin);
-            const scaleY = plotHeight / (bounds.wMax - bounds.wMin);
-            const vx = -scaleX;
-            const vy = -0.000405 * scaleY;
-            const vLen = Math.hypot(vx, vy);
-            const ux = vx / vLen;
-            const uy = vy / vLen;
-
-            const xOut = px + len * ux;
-            const yOut = py + len * uy;
-            const xLabel = px + (len + 8) * ux;
-            const yLabel = py + (len + 8) * uy;
-
-            if (px < margin.left - 20 || py < margin.top - 20) return null;
-
-            return (
-              <g key={`sat-h-${tick.h}`}>
-                <line
-                  x1={px}
-                  y1={py}
-                  x2={xOut}
-                  y2={yOut}
-                  stroke={themeStyles.axisLine}
-                  strokeWidth={tick.isMajor ? 1.2 : 0.7}
-                />
-                {tick.isMajor && (
-                  <text
-                    x={xLabel}
-                    y={yLabel + 2.5}
-                    textAnchor="end"
-                    dominantBaseline="middle"
-                    fill={themeStyles.axisText}
-                    fontSize="7.5"
-                    fontWeight="bold"
-                    fontFamily="Fira Code, monospace"
-                  >
-                    {tick.label}
-                  </text>
-                )}
-              </g>
-            );
-          })}
-          <text
-            x={margin.left + 90}
-            y={margin.top - 14}
-            fill={themeStyles.axisLabel}
-            fontSize="8"
-            fontWeight="bold"
-            fontFamily="Roboto Condensed, sans-serif"
-            letterSpacing="0.4"
-          >
-            ENTALPÍA DE SATURACIÓN kJ/kg DE AIRE SECO
-          </text>
-        </g>
-
-        {/* Sensible Heat Factor Vertical Scale (Margen Derecho - Carta Valcon / ASHRAE) */}
-        {showProtractor && chartType === 'carrier' && (
-          <g className="shf-vertical-scale" transform={`translate(${margin.left + plotWidth + 76}, 0)`}>
-            <line
-              x1="0"
-              y1={margin.top}
-              x2="0"
-              y2={margin.top + plotHeight}
-              stroke={themeStyles.axisLine}
-              strokeWidth="1.2"
-            />
-            {/* Top header title */}
-            <text
-              x="0"
-              y={margin.top - 12}
-              textAnchor="middle"
-              fill={themeStyles.axisLabel}
-              fontSize="9"
-              fontWeight="bold"
-              fontFamily="Roboto Condensed, sans-serif"
-            >
-              FCS / SHR
-            </text>
-            {shfScaleTicks.map((tick) => {
-              if (!tick.inRange) return null;
-              const isSelected = selectedSHR === tick.shr;
-              return (
-                <g
-                  key={`shf-${tick.shr}`}
-                  transform={`translate(0, ${tick.py})`}
-                  className="cursor-pointer group"
-                  onClick={() => setSelectedSHR(isSelected ? null : tick.shr)}
-                >
-                  {/* Hit area for clicking */}
-                  <line x1="-10" x2="30" stroke="transparent" strokeWidth="10" />
-                  <line
-                    x1="0"
-                    x2={tick.isMajor ? 6 : 3.5}
-                    stroke={isSelected ? '#F59E0B' : themeStyles.axisLine}
-                    strokeWidth={isSelected ? 2 : tick.isMajor ? 1.2 : 0.8}
-                  />
-                  {tick.isMajor && (
-                    <text
-                      x="9"
-                      y="2.5"
-                      fill={isSelected ? '#F59E0B' : themeStyles.axisText}
-                      fontSize="7.5"
-                      fontFamily="Fira Code, monospace"
-                      fontWeight={isSelected ? 'bold' : '600'}
-                    >
-                      {tick.label}
-                    </text>
-                  )}
-                </g>
-              );
-            })}
-            <text
-              x="36"
-              y={margin.top + plotHeight / 2}
-              textAnchor="middle"
-              transform={`rotate(-90, 36, ${margin.top + plotHeight / 2})`}
-              fill={themeStyles.axisLabel}
-              fontSize="8.5"
-              fontWeight="bold"
-              fontFamily="Roboto Condensed, sans-serif"
-              letterSpacing="0.4"
-            >
-              FACTOR DE CALOR SENSIBLE (FCS / SHR)
-            </text>
-          </g>
-        )}
 
         {/* Dynamic Precision Crosshairs and Alignment Indicators */}
         {hoverCoords && !isPanning && (
@@ -2751,162 +2437,362 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
           </g>
         )}
 
-        {/* 3. Anchored Fixed X-Axis at Bottom of Plot */}
-        <g className="x-axis" transform={`translate(0, ${margin.top + plotHeight})`}>
-          <line
-            x1={margin.left}
-            y1="0"
-            x2={margin.left + plotWidth}
-            y2="0"
+        {/* ============================================================ */}
+        {/* 3. DYNAMIC SCALED AXES & PLOT FRAME (Carrier / Mollier)    */}
+        {/* ============================================================ */}
+        <g className="chart-outer-axes pointer-events-none select-none">
+          {/* Outer rectangular plot border */}
+          <rect
+            x={margin.left}
+            y={margin.top}
+            width={plotWidth}
+            height={plotHeight}
+            fill="none"
             stroke={themeStyles.axisLine}
             strokeWidth="1.5"
           />
-          {xTicks.map((t) => {
-            const [x] = coordToPixel(t, bounds.wMin);
-            const displayVal = units === 'IP' ? UnitConvert.cToF(t).toFixed(0) : t;
-            return (
-              <g key={`x-tick-${t}`} transform={`translate(${x}, 0)`}>
-                <line y1="0" y2="6" stroke={themeStyles.axisLine} strokeWidth="1.5" />
+
+          {chartType === 'carrier' ? (
+            /* CARRIER: Bottom Tdb Axis & Right W Axis */
+            <>
+              {/* Bottom Tdb Axis Ticks & Numbers */}
+              <g className="carrier-bottom-axis">
+                <line
+                  x1={margin.left}
+                  y1={margin.top + plotHeight}
+                  x2={margin.left + plotWidth}
+                  y2={margin.top + plotHeight}
+                  stroke={themeStyles.axisLine}
+                  strokeWidth="1.5"
+                />
+                {xTicks.map((t) => {
+                  const [px] = coordToPixel(t, bounds.wMin);
+                  if (px < margin.left - 1 || px > margin.left + plotWidth + 1) return null;
+                  const displayT = units === 'IP' ? UnitConvert.cToF(t).toFixed(0) : t;
+                  return (
+                    <g key={`carrier-xtick-${t}`}>
+                      <line
+                        x1={px}
+                        y1={margin.top + plotHeight}
+                        x2={px}
+                        y2={margin.top + plotHeight + 6}
+                        stroke={themeStyles.axisLine}
+                        strokeWidth="1.2"
+                      />
+                      <text
+                        x={px}
+                        y={margin.top + plotHeight + 18}
+                        textAnchor="middle"
+                        fill={themeStyles.axisText}
+                        fontSize="10.5"
+                        fontWeight="600"
+                        fontFamily="system-ui, -apple-system, sans-serif"
+                      >
+                        {displayT}
+                      </text>
+                    </g>
+                  );
+                })}
+                {/* Bottom Axis Label */}
                 <text
-                  y="20"
+                  x={margin.left + plotWidth / 2}
+                  y={margin.top + plotHeight + 36}
                   textAnchor="middle"
-                  fill={themeStyles.axisText}
+                  fill={themeStyles.axisLabel}
                   fontSize="11"
-                  fontFamily="Fira Code, monospace"
+                  fontWeight="bold"
+                  fontFamily="system-ui, -apple-system, sans-serif"
                 >
-                  {displayVal}
+                  Temperatura de Bulbo Seco Tbs [{units === 'IP' ? '°F' : '°C'}] · Presión: {pressure} Pa
                 </text>
+
+                {/* Dynamic Cursor Indicator on Bottom Axis */}
+                {hoverCoords && !isPanning && hoverCoords.x >= margin.left && hoverCoords.x <= margin.left + plotWidth && (
+                  <g className="cursor-indicator-x">
+                    <polygon
+                      points={`${hoverCoords.x},${margin.top + plotHeight} ${hoverCoords.x - 4},${margin.top + plotHeight + 6} ${hoverCoords.x + 4},${margin.top + plotHeight + 6}`}
+                      fill={themeStyles.isDark ? '#38BDF8' : '#0284C7'}
+                    />
+                    <rect
+                      x={hoverCoords.x - 22}
+                      y={margin.top + plotHeight + 6}
+                      width="44"
+                      height="15"
+                      rx="3"
+                      fill={themeStyles.isDark ? '#0F172A' : '#0284C7'}
+                      stroke={themeStyles.isDark ? '#38BDF8' : '#0284C7'}
+                      strokeWidth="1"
+                    />
+                    <text
+                      x={hoverCoords.x}
+                      y={margin.top + plotHeight + 17}
+                      textAnchor="middle"
+                      fill="#FFFFFF"
+                      fontSize="9"
+                      fontWeight="bold"
+                      fontFamily="monospace"
+                    >
+                      {units === 'IP' ? `${UnitConvert.cToF(hoverCoords.tdb).toFixed(1)}°F` : `${hoverCoords.tdb.toFixed(1)}°C`}
+                    </text>
+                  </g>
+                )}
               </g>
-            );
-          })}
 
-          {/* Dynamic Active X Marker under cursor */}
-          {hoverCoords && !isPanning && (
-            <g transform={`translate(${hoverCoords.x}, 0)`} className="pointer-events-none">
-              <polygon points="0,0 -4,6 4,6" fill={themeStyles.isDark ? '#38BDF8' : '#0284C7'} />
-              <rect
-                x="-26"
-                y="6"
-                width="52"
-                height="16"
-                rx="3"
-                fill={themeStyles.isDark ? '#0F172A' : '#0284C7'}
-                stroke={themeStyles.isDark ? '#38BDF8' : '#0284C7'}
-                strokeWidth="1"
-              />
-              <text
-                x="0"
-                y="17.5"
-                textAnchor="middle"
-                fill="#FFFFFF"
-                fontSize="9"
-                fontWeight="bold"
-                fontFamily="Fira Code, monospace"
-              >
-                {units === 'IP'
-                  ? `${UnitConvert.cToF(hoverCoords.tdb).toFixed(1)}°F`
-                  : `${hoverCoords.tdb.toFixed(1)}°C`}
-              </text>
-            </g>
-          )}
-
-          <text
-            x={margin.left + plotWidth / 2}
-            y="38"
-            textAnchor="middle"
-            fill={themeStyles.axisLabel}
-            fontSize="12"
-            fontWeight="bold"
-            fontFamily="Roboto Condensed, sans-serif"
-          >
-            Temperatura de Bulbo Seco Tbs [{units === 'IP' ? '°F' : '°C'}]
-          </text>
-        </g>
-
-        {/* 4. Anchored Fixed Y-Axis at Right of Plot (Humidity Ratio) */}
-        <g className="y-axis" transform={`translate(${margin.left + plotWidth}, 0)`}>
-          <line
-            x1="0"
-            y1={margin.top}
-            x2="0"
-            y2={margin.top + plotHeight}
-            stroke={themeStyles.axisLine}
-            strokeWidth="1.5"
-          />
-          {/* Top header title */}
-          <text
-            x="4"
-            y={margin.top - 12}
-            textAnchor="start"
-            fill={themeStyles.axisLabel}
-            fontSize="9"
-            fontWeight="bold"
-            fontFamily="Roboto Condensed, sans-serif"
-          >
-            W [{units === 'IP' ? 'gr/lb' : 'g/kg'}]
-          </text>
-          {yTicks.map((w) => {
-            const [, y] = coordToPixel(bounds.tdbMin, w);
-            const displayVal =
-              units === 'IP' ? (w * 7000).toFixed(0) : (w * 1000).toFixed(0);
-            return (
-              <g key={`y-tick-${w}`} transform={`translate(0, ${y})`}>
-                <line x1="0" x2="5" stroke={themeStyles.axisLine} strokeWidth="1.5" />
+              {/* Right Humidity Ratio Axis Ticks & Numbers */}
+              <g className="carrier-right-axis">
+                <line
+                  x1={margin.left + plotWidth}
+                  y1={margin.top}
+                  x2={margin.left + plotWidth}
+                  y2={margin.top + plotHeight}
+                  stroke={themeStyles.axisLine}
+                  strokeWidth="1.5"
+                />
+                {yTicks.map((wG) => {
+                  const [, py] = coordToPixel(bounds.tdbMax, wG / 1000);
+                  if (py < margin.top - 1 || py > margin.top + plotHeight + 1) return null;
+                  const displayW = units === 'IP' ? ((wG / 1000) * 7000).toFixed(0) : wG;
+                  return (
+                    <g key={`carrier-ytick-${wG}`}>
+                      <line
+                        x1={margin.left + plotWidth}
+                        y1={py}
+                        x2={margin.left + plotWidth + 6}
+                        y2={py}
+                        stroke={themeStyles.axisLine}
+                        strokeWidth="1.2"
+                      />
+                      <text
+                        x={margin.left + plotWidth + 9}
+                        y={py + 3.5}
+                        textAnchor="start"
+                        fill={themeStyles.axisText}
+                        fontSize="9.5"
+                        fontWeight="600"
+                        fontFamily="monospace"
+                      >
+                        {displayW}
+                      </text>
+                    </g>
+                  );
+                })}
+                {/* Right Axis Label */}
                 <text
-                  x="8"
-                  y="3.5"
-                  fill={themeStyles.axisText}
-                  fontSize="10"
-                  fontFamily="Fira Code, monospace"
-                  fontWeight="600"
+                  x={margin.left + plotWidth + 50}
+                  y={margin.top + plotHeight / 2}
+                  textAnchor="middle"
+                  transform={`rotate(90, ${margin.left + plotWidth + 50}, ${margin.top + plotHeight / 2})`}
+                  fill={themeStyles.axisLabel}
+                  fontSize="11"
+                  fontWeight="bold"
+                  fontFamily="system-ui, -apple-system, sans-serif"
                 >
-                  {displayVal}
+                  Humedad Específica W [{units === 'IP' ? 'gr/lb' : 'g/kg(a.s.)'}]
                 </text>
-              </g>
-            );
-          })}
 
-          {/* Dynamic Active Y Marker under cursor (compact width strictly inside lane) */}
-          {hoverCoords && !isPanning && (
-            <g transform={`translate(0, ${hoverCoords.y})`} className="pointer-events-none">
-              <polygon points="0,0 5,-3.5 5,3.5" fill={themeStyles.isDark ? '#F59E0B' : '#D97706'} />
-              <rect
-                x="5"
-                y="-8"
-                width="36"
-                height="16"
-                rx="3"
-                fill={themeStyles.isDark ? '#0F172A' : '#D97706'}
-                stroke={themeStyles.isDark ? '#F59E0B' : '#D97706'}
-                strokeWidth="1"
-              />
-              <text
-                x="23"
-                y="3.5"
-                textAnchor="middle"
-                fill="#FFFFFF"
-                fontSize="8.5"
-                fontWeight="bold"
-                fontFamily="Fira Code, monospace"
-              >
-                {units === 'IP'
-                  ? `${(hoverCoords.w * 7000).toFixed(0)}gr`
-                  : `${(hoverCoords.w * 1000).toFixed(1)}g`}
-              </text>
-            </g>
+                {/* Dynamic Cursor Indicator on Right Axis */}
+                {hoverCoords && !isPanning && hoverCoords.y >= margin.top && hoverCoords.y <= margin.top + plotHeight && (
+                  <g className="cursor-indicator-y">
+                    <polygon
+                      points={`${margin.left + plotWidth},${hoverCoords.y} ${margin.left + plotWidth + 6},${hoverCoords.y - 4} ${margin.left + plotWidth + 6},${hoverCoords.y + 4}`}
+                      fill={themeStyles.isDark ? '#F59E0B' : '#D97706'}
+                    />
+                    <rect
+                      x={margin.left + plotWidth + 6}
+                      y={hoverCoords.y - 7}
+                      width="40"
+                      height="15"
+                      rx="3"
+                      fill={themeStyles.isDark ? '#0F172A' : '#D97706'}
+                      stroke={themeStyles.isDark ? '#F59E0B' : '#D97706'}
+                      strokeWidth="1"
+                    />
+                    <text
+                      x={margin.left + plotWidth + 26}
+                      y={hoverCoords.y + 4}
+                      textAnchor="middle"
+                      fill="#FFFFFF"
+                      fontSize="8.5"
+                      fontWeight="bold"
+                      fontFamily="monospace"
+                    >
+                      {units === 'IP' ? `${(hoverCoords.w * 7000).toFixed(0)}gr` : `${(hoverCoords.w * 1000).toFixed(1)}g`}
+                    </text>
+                  </g>
+                )}
+              </g>
+            </>
+          ) : (
+            /* MOLLIER: Left Tdb Axis & Top W Axis */
+            <>
+              {/* Left Tdb Axis Ticks & Numbers */}
+              <g className="mollier-left-axis">
+                <line
+                  x1={margin.left}
+                  y1={margin.top}
+                  x2={margin.left}
+                  y2={margin.top + plotHeight}
+                  stroke={themeStyles.axisLine}
+                  strokeWidth="1.5"
+                />
+                {xTicks.map((t) => {
+                  const [, py] = coordToPixel(t, bounds.wMin);
+                  if (py < margin.top - 1 || py > margin.top + plotHeight + 1) return null;
+                  const displayT = units === 'IP' ? UnitConvert.cToF(t).toFixed(0) : t;
+                  return (
+                    <g key={`mollier-xtick-${t}`}>
+                      <line
+                        x1={margin.left - 6}
+                        y1={py}
+                        x2={margin.left}
+                        y2={py}
+                        stroke={themeStyles.axisLine}
+                        strokeWidth="1.2"
+                      />
+                      <text
+                        x={margin.left - 9}
+                        y={py + 3.5}
+                        textAnchor="end"
+                        fill={themeStyles.axisText}
+                        fontSize="10"
+                        fontWeight="600"
+                        fontFamily="system-ui, -apple-system, sans-serif"
+                      >
+                        {displayT}
+                      </text>
+                    </g>
+                  );
+                })}
+                {/* Left Axis Label */}
+                <text
+                  x={margin.left - 42}
+                  y={margin.top + plotHeight / 2}
+                  textAnchor="middle"
+                  transform={`rotate(-90, ${margin.left - 42}, ${margin.top + plotHeight / 2})`}
+                  fill={themeStyles.axisLabel}
+                  fontSize="11"
+                  fontWeight="bold"
+                  fontFamily="system-ui, -apple-system, sans-serif"
+                >
+                  Temperatura Tbs [{units === 'IP' ? '°F' : '°C'}]
+                </text>
+
+                {/* Dynamic Cursor Indicator on Left Axis */}
+                {hoverCoords && !isPanning && hoverCoords.y >= margin.top && hoverCoords.y <= margin.top + plotHeight && (
+                  <g className="cursor-indicator-mollier-t">
+                    <polygon
+                      points={`${margin.left},${hoverCoords.y} ${margin.left - 6},${hoverCoords.y - 4} ${margin.left - 6},${hoverCoords.y + 4}`}
+                      fill={themeStyles.isDark ? '#38BDF8' : '#0284C7'}
+                    />
+                    <rect
+                      x={margin.left - 46}
+                      y={hoverCoords.y - 7}
+                      width="40"
+                      height="15"
+                      rx="3"
+                      fill={themeStyles.isDark ? '#0F172A' : '#0284C7'}
+                      stroke={themeStyles.isDark ? '#38BDF8' : '#0284C7'}
+                      strokeWidth="1"
+                    />
+                    <text
+                      x={margin.left - 26}
+                      y={hoverCoords.y + 4}
+                      textAnchor="middle"
+                      fill="#FFFFFF"
+                      fontSize="8.5"
+                      fontWeight="bold"
+                      fontFamily="monospace"
+                    >
+                      {units === 'IP' ? `${UnitConvert.cToF(hoverCoords.tdb).toFixed(1)}°F` : `${hoverCoords.tdb.toFixed(1)}°C`}
+                    </text>
+                  </g>
+                )}
+              </g>
+
+              {/* Top W Axis Ticks & Numbers */}
+              <g className="mollier-top-axis">
+                <line
+                  x1={margin.left}
+                  y1={margin.top}
+                  x2={margin.left + plotWidth}
+                  y2={margin.top}
+                  stroke={themeStyles.axisLine}
+                  strokeWidth="1.5"
+                />
+                {yTicks.map((wG) => {
+                  const [px] = coordToPixel(bounds.tdbMin, wG / 1000);
+                  if (px < margin.left - 1 || px > margin.left + plotWidth + 1) return null;
+                  const displayW = units === 'IP' ? ((wG / 1000) * 7000).toFixed(0) : wG;
+                  return (
+                    <g key={`mollier-ytick-${wG}`}>
+                      <line
+                        x1={px}
+                        y1={margin.top - 6}
+                        x2={px}
+                        y2={margin.top}
+                        stroke={themeStyles.axisLine}
+                        strokeWidth="1.2"
+                      />
+                      <text
+                        x={px}
+                        y={margin.top - 10}
+                        textAnchor="middle"
+                        fill={themeStyles.axisText}
+                        fontSize="10"
+                        fontWeight="600"
+                        fontFamily="monospace"
+                      >
+                        {displayW}
+                      </text>
+                    </g>
+                  );
+                })}
+                {/* Top Axis Label */}
+                <text
+                  x={margin.left + plotWidth / 2}
+                  y={margin.top - 26}
+                  textAnchor="middle"
+                  fill={themeStyles.axisLabel}
+                  fontSize="11"
+                  fontWeight="bold"
+                  fontFamily="system-ui, -apple-system, sans-serif"
+                >
+                  Humedad Específica W [{units === 'IP' ? 'gr/lb' : 'g/kg(a.s.)'}] · Presión: {pressure} Pa
+                </text>
+
+                {/* Dynamic Cursor Indicator on Top Axis */}
+                {hoverCoords && !isPanning && hoverCoords.x >= margin.left && hoverCoords.x <= margin.left + plotWidth && (
+                  <g className="cursor-indicator-mollier-w">
+                    <polygon
+                      points={`${hoverCoords.x},${margin.top} ${hoverCoords.x - 4},${margin.top - 6} ${hoverCoords.x + 4},${margin.top - 6}`}
+                      fill={themeStyles.isDark ? '#F59E0B' : '#D97706'}
+                    />
+                    <rect
+                      x={hoverCoords.x - 20}
+                      y={margin.top - 21}
+                      width="40"
+                      height="15"
+                      rx="3"
+                      fill={themeStyles.isDark ? '#0F172A' : '#D97706'}
+                      stroke={themeStyles.isDark ? '#F59E0B' : '#D97706'}
+                      strokeWidth="1"
+                    />
+                    <text
+                      x={hoverCoords.x}
+                      y={margin.top - 10}
+                      textAnchor="middle"
+                      fill="#FFFFFF"
+                      fontSize="8.5"
+                      fontWeight="bold"
+                      fontFamily="monospace"
+                    >
+                      {units === 'IP' ? `${(hoverCoords.w * 7000).toFixed(0)}gr` : `${(hoverCoords.w * 1000).toFixed(1)}g`}
+                    </text>
+                  </g>
+                )}
+              </g>
+            </>
           )}
-          <text
-            x="46"
-            y={margin.top + plotHeight / 2}
-            textAnchor="middle"
-            transform={`rotate(-90, 46, ${margin.top + plotHeight / 2})`}
-            fill={themeStyles.axisLabel}
-            fontSize="10.5"
-            fontWeight="bold"
-            fontFamily="Roboto Condensed, sans-serif"
-          >
-            Humedad Específica W [{units === 'IP' ? 'gr/lb' : 'g/kg'}]
-          </text>
         </g>
       </svg>
 
