@@ -33,6 +33,8 @@ import {
   computeEnthalpyDeviations,
   ASHRAE_SHR_VALUES,
   getSlopeFromSHR,
+  calculateADP,
+  getAshraeReferencePoint,
 } from '../utils/ashraeScales';
 import { FlyCarpetCarrierDiagram } from './FlyCarpetCarrierDiagram';
 import { FlyCarpetMollierDiagram } from './FlyCarpetMollierDiagram';
@@ -242,36 +244,6 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
     [isolatedProcessIds, isolatedProcessInfo]
   );
 
-  // Center diagram on a single state point with focused zoom
-  const handleCenterPoint = useCallback((tdb: number, w: number) => {
-    const spanT = 24;
-    const spanW = 0.012;
-    setBounds({
-      tdbMin: Number((tdb - spanT / 2).toFixed(2)),
-      tdbMax: Number((tdb + spanT / 2).toFixed(2)),
-      wMin: Number(Math.max(0, w - spanW / 2).toFixed(5)),
-      wMax: Number((w + spanW / 2).toFixed(5)),
-    });
-  }, []);
-
-  // Center diagram on a process connection between two points
-  const handleCenterProcess = useCallback((p1: StatePoint, p2: StatePoint) => {
-    const midT = (p1.tdb + p2.tdb) / 2;
-    const midW = (p1.w + p2.w) / 2;
-    const deltaT = Math.abs(p2.tdb - p1.tdb);
-    const deltaW = Math.abs(p2.w - p1.w);
-
-    const spanT = Math.max(16, deltaT * 2.2);
-    const spanW = Math.max(0.008, deltaW * 2.2);
-
-    setBounds({
-      tdbMin: Number((midT - spanT / 2).toFixed(2)),
-      tdbMax: Number((midT + spanT / 2).toFixed(2)),
-      wMin: Number(Math.max(0, midW - spanW / 2).toFixed(5)),
-      wMax: Number((midW + spanW / 2).toFixed(5)),
-    });
-  }, []);
-
   // Official Chart Theme: 'ashrae_classic' (Canonical Green on technical paper), 'valcon_color' (Polychrome), or 'dark_blueprint' (CAD)
   const [chartTheme, setChartTheme] = useState<'ashrae_classic' | 'valcon_color' | 'dark_blueprint'>('ashrae_classic');
   const [localShowProtractor, setLocalShowProtractor] = useState<boolean>(true);
@@ -286,9 +258,24 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
 
   const [showEnthalpyDeviations, setShowEnthalpyDeviations] = useState<boolean>(true);
   const [selectedSHR, setSelectedSHR] = useState<number | null>(null);
+  const [hoveredProtractorSHR, setHoveredProtractorSHR] = useState<number | null>(null);
+  const activeSHR = hoveredProtractorSHR ?? selectedSHR;
 
-  // Active visible domain bounds (Zoom and Pan apply directly to the diagram coordinates, not the outer window)
-  const [bounds, setBounds] = useState<ChartBounds>(DEFAULT_BOUNDS);
+  // Diagram domain bounds: fixed standard canonical psychrometric domain
+  const bounds = DEFAULT_BOUNDS;
+
+  // Unified Diagram Viewport (Zoom and Pan apply synchronously to the container frame, axes, and all contents)
+  const DEFAULT_VIEWBOX = useMemo(() => ({ x: 0, y: 0, width: viewBoxWidth, height: viewBoxHeight }), [viewBoxWidth, viewBoxHeight]);
+  const [viewBox, setViewBox] = useState<{ x: number; y: number; width: number; height: number }>({
+    x: 0,
+    y: 0,
+    width: viewBoxWidth,
+    height: viewBoxHeight,
+  });
+
+  useEffect(() => {
+    setViewBox({ x: 0, y: 0, width: viewBoxWidth, height: viewBoxHeight });
+  }, [chartType, viewBoxWidth, viewBoxHeight]);
 
   // Optimized margins giving clean clearance for official ASHRAE outer enthalpy scale and FCS scale
   const margin = useMemo(() => {
@@ -311,33 +298,16 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
   const plotWidth = viewBoxWidth - margin.left - margin.right;
   const plotHeight = viewBoxHeight - margin.top - margin.bottom;
 
-  const innerPlotTransform = useMemo(() => {
-    if (chartType === 'mollier') {
-      const scaleX = 0.030 / (bounds.wMax - bounds.wMin);
-      const scaleY = 60.0 / (bounds.tdbMax - bounds.tdbMin);
-      const transX = margin.left - scaleX * margin.left - (bounds.wMin / (bounds.wMax - bounds.wMin)) * plotWidth;
-      const transY = (margin.top + plotHeight) - scaleY * (margin.top + plotHeight) + ((bounds.tdbMin - (-10.0)) / (bounds.tdbMax - bounds.tdbMin)) * plotHeight;
-      return `matrix(${scaleX.toFixed(6)}, 0, 0, ${scaleY.toFixed(6)}, ${transX.toFixed(4)}, ${transY.toFixed(4)})`;
-    } else {
-      const scaleX = 60.0 / (bounds.tdbMax - bounds.tdbMin);
-      const scaleY = 0.030 / (bounds.wMax - bounds.wMin);
-      const transX = margin.left - scaleX * margin.left - ((bounds.tdbMin - (-10.0)) / (bounds.tdbMax - bounds.tdbMin)) * plotWidth;
-      const transY = (margin.top + plotHeight) - scaleY * (margin.top + plotHeight) + (bounds.wMin / (bounds.wMax - bounds.wMin)) * plotHeight;
-      return `matrix(${scaleX.toFixed(6)}, 0, 0, ${scaleY.toFixed(6)}, ${transX.toFixed(4)}, ${transY.toFixed(4)})`;
-    }
-  }, [chartType, bounds, margin.left, margin.top, plotWidth, plotHeight]);
-
-  useEffect(() => {
-    setBounds(DEFAULT_BOUNDS);
-  }, [chartType]);
+  const innerPlotTransform = undefined;
 
   // Pan & Drag state
   const [isPanning, setIsPanning] = useState(false);
-  const panStartRef = useRef<{ clientX: number; clientY: number; bounds: ChartBounds }>({
+  const panStartRef = useRef<{ clientX: number; clientY: number; viewBox: typeof DEFAULT_VIEWBOX }>({
     clientX: 0,
     clientY: 0,
-    bounds: DEFAULT_BOUNDS,
+    viewBox: { x: 0, y: 0, width: viewBoxWidth, height: viewBoxHeight },
   });
+  const hasMovedRef = useRef<boolean>(false);
   const [draggedPointId, setDraggedPointId] = useState<string | null>(null);
 
   // Cursor hover thermodynamic state
@@ -430,81 +400,128 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
     [chartType, pixelToCoordCarrier, pixelToCoordMollier]
   );
 
-  // ---------------- ZOOM, PAN & FIT OPERATIONS (APPLIED EXCLUSIVELY TO DIAGRAM DOMAIN) ----------------
+  // ---------------- UNIFIED ZOOM, PAN & FIT OPERATIONS (CONTAINER + CONTENTS) ----------------
   const handleZoomIn = () => {
-    const spanT = (bounds.tdbMax - bounds.tdbMin) * 0.8;
-    const spanW = (bounds.wMax - bounds.wMin) * 0.8;
-    const midT = (bounds.tdbMin + bounds.tdbMax) / 2;
-    const midW = (bounds.wMin + bounds.wMax) / 2;
-    const newWMin = Math.max(0, midW - spanW / 2);
-    setBounds({
-      tdbMin: Number((midT - spanT / 2).toFixed(2)),
-      tdbMax: Number((midT + spanT / 2).toFixed(2)),
-      wMin: Number(newWMin.toFixed(5)),
-      wMax: Number((newWMin + spanW).toFixed(5)),
+    setViewBox((prev) => {
+      const newWidth = Math.max(120, prev.width * 0.8);
+      const newHeight = (newWidth / viewBoxWidth) * viewBoxHeight;
+      return {
+        x: prev.x + (prev.width - newWidth) / 2,
+        y: prev.y + (prev.height - newHeight) / 2,
+        width: newWidth,
+        height: newHeight,
+      };
     });
   };
 
   const handleZoomOut = () => {
-    const spanT = Math.min(120, (bounds.tdbMax - bounds.tdbMin) * 1.25);
-    const spanW = Math.min(0.08, (bounds.wMax - bounds.wMin) * 1.25);
-    const midT = (bounds.tdbMin + bounds.tdbMax) / 2;
-    const midW = (bounds.wMin + bounds.wMax) / 2;
-    const newWMin = Math.max(0, midW - spanW / 2);
-    setBounds({
-      tdbMin: Number((midT - spanT / 2).toFixed(2)),
-      tdbMax: Number((midT + spanT / 2).toFixed(2)),
-      wMin: Number(newWMin.toFixed(5)),
-      wMax: Number((newWMin + spanW).toFixed(5)),
+    setViewBox((prev) => {
+      const newWidth = Math.min(3600, prev.width * 1.25);
+      const newHeight = (newWidth / viewBoxWidth) * viewBoxHeight;
+      return {
+        x: prev.x + (prev.width - newWidth) / 2,
+        y: prev.y + (prev.height - newHeight) / 2,
+        width: newWidth,
+        height: newHeight,
+      };
     });
   };
 
   const handleZoomAll = () => {
     if (points.length === 0) {
-      setBounds(DEFAULT_BOUNDS);
+      setViewBox(DEFAULT_VIEWBOX);
       return;
     }
-    const tVals = points.map((p) => p.tdb);
-    const wVals = points.map((p) => p.w);
-    const minT = Math.min(...tVals);
-    const maxT = Math.max(...tVals);
-    const minW = Math.min(...wVals);
-    const maxW = Math.max(...wVals);
+    const pixelCoords = points.map((p) => coordToPixel(p.tdb, p.w));
+    const xs = pixelCoords.map(([x]) => x);
+    const ys = pixelCoords.map(([, y]) => y);
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
 
-    const marginT = Math.max(5, (maxT - minT) * 0.25);
-    const marginW = Math.max(0.003, (maxW - minW) * 0.25);
+    // Give comfortable margins around the points, including space for point labels
+    const paddingX = Math.max(90, (maxX - minX) * 0.35);
+    const paddingY = Math.max(70, (maxY - minY) * 0.35);
 
-    const newWMin = Math.max(0, minW - marginW);
-    const spanW = Math.max(0.005, maxW + marginW - newWMin);
+    const fitWidth = Math.max(380, (maxX - minX) + paddingX * 2);
+    const fitHeight = Math.max(260, (maxY - minY) + paddingY * 2);
 
-    setBounds({
-      tdbMin: Number((minT - marginT).toFixed(1)),
-      tdbMax: Number((maxT + marginT).toFixed(1)),
-      wMin: Number(newWMin.toFixed(5)),
-      wMax: Number((newWMin + spanW).toFixed(5)),
+    const targetRatio = viewBoxWidth / viewBoxHeight;
+    let finalWidth = fitWidth;
+    let finalHeight = fitHeight;
+
+    if (fitWidth / fitHeight > targetRatio) {
+      finalHeight = fitWidth / targetRatio;
+    } else {
+      finalWidth = fitHeight * targetRatio;
+    }
+
+    const centerX = (minX + maxX) / 2;
+    const centerY = (minY + maxY) / 2;
+
+    setViewBox({
+      x: centerX - finalWidth / 2,
+      y: centerY - finalHeight / 2,
+      width: finalWidth,
+      height: finalHeight,
     });
   };
 
   const handleCenterCycle = () => {
-    if (points.length === 0) return;
-    const tVals = points.map((p) => p.tdb);
-    const wVals = points.map((p) => p.w);
-    const centerT = (Math.min(...tVals) + Math.max(...tVals)) / 2;
-    const centerW = (Math.min(...wVals) + Math.max(...wVals)) / 2;
-    const spanT = bounds.tdbMax - bounds.tdbMin;
-    const spanW = bounds.wMax - bounds.wMin;
-    const newWMin = Math.max(0, centerW - spanW / 2);
-    setBounds({
-      tdbMin: Number((centerT - spanT / 2).toFixed(2)),
-      tdbMax: Number((centerT + spanT / 2).toFixed(2)),
-      wMin: Number(newWMin.toFixed(5)),
-      wMax: Number((newWMin + spanW).toFixed(5)),
-    });
+    if (points.length === 0) {
+      setViewBox(DEFAULT_VIEWBOX);
+      return;
+    }
+    const pixelCoords = points.map((p) => coordToPixel(p.tdb, p.w));
+    const xs = pixelCoords.map(([x]) => x);
+    const ys = pixelCoords.map(([, y]) => y);
+    const centerX = (Math.min(...xs) + Math.max(...xs)) / 2;
+    const centerY = (Math.min(...ys) + Math.max(...ys)) / 2;
+
+    setViewBox((prev) => ({
+      ...prev,
+      x: centerX - prev.width / 2,
+      y: centerY - prev.height / 2,
+    }));
   };
 
   const handleResetBounds = () => {
-    setBounds(DEFAULT_BOUNDS);
+    setViewBox(DEFAULT_VIEWBOX);
   };
+
+  // Center diagram on a single state point with focused zoom
+  const handleCenterPoint = useCallback((tdb: number, w: number) => {
+    const [px, py] = coordToPixel(tdb, w);
+    setViewBox((prev) => {
+      const zoomWidth = Math.min(prev.width, 420);
+      const zoomHeight = (zoomWidth / viewBoxWidth) * viewBoxHeight;
+      return {
+        x: px - zoomWidth / 2,
+        y: py - zoomHeight / 2,
+        width: zoomWidth,
+        height: zoomHeight,
+      };
+    });
+  }, [coordToPixel, viewBoxWidth, viewBoxHeight]);
+
+  // Center diagram on a process connection between two points
+  const handleCenterProcess = useCallback((p1: StatePoint, p2: StatePoint) => {
+    const [x1, y1] = coordToPixel(p1.tdb, p1.w);
+    const [x2, y2] = coordToPixel(p2.tdb, p2.w);
+    const midX = (x1 + x2) / 2;
+    const midY = (y1 + y2) / 2;
+    const dist = Math.hypot(x2 - x1, y2 - y1);
+    const zoomWidth = Math.max(380, Math.min(750, dist * 2.8));
+    const zoomHeight = (zoomWidth / viewBoxWidth) * viewBoxHeight;
+
+    setViewBox({
+      x: midX - zoomWidth / 2,
+      y: midY - zoomHeight / 2,
+      width: zoomWidth,
+      height: zoomHeight,
+    });
+  }, [coordToPixel, viewBoxWidth, viewBoxHeight]);
 
   // Mathematically exact SVG cursor coordinate resolution via SVG CTM (accounts for viewBox, preserveAspectRatio letterboxing and DPI)
   const getSvgCursorPoint = useCallback(
@@ -521,19 +538,19 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
       }
       // Geometric fallback
       const rect = svg.getBoundingClientRect();
-      const scale = Math.min(rect.width / viewBoxWidth, rect.height / viewBoxHeight);
-      const offsetX = (rect.width - viewBoxWidth * scale) / 2;
-      const offsetY = (rect.height - viewBoxHeight * scale) / 2;
+      const scale = Math.min(rect.width / viewBox.width, rect.height / viewBox.height);
+      const offsetX = (rect.width - viewBox.width * scale) / 2;
+      const offsetY = (rect.height - viewBox.height * scale) / 2;
       return {
-        x: (e.clientX - rect.left - offsetX) / scale,
-        y: (e.clientY - rect.top - offsetY) / scale,
+        x: viewBox.x + (e.clientX - rect.left - offsetX) / scale,
+        y: viewBox.y + (e.clientY - rect.top - offsetY) / scale,
       };
     },
-    [viewBoxWidth, viewBoxHeight]
+    [viewBox]
   );
 
   // Non-passive wheel zoom listener attached directly to SVG canvas
-  // Accurately supports both Carrier (X=T, Y=W) and Mollier (X=W, Y=T)
+  // Accurately zooms both container and contents around cursor
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return;
@@ -542,67 +559,47 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
       e.preventDefault();
       e.stopPropagation();
 
-      const { x: rawPx, y: rawPy } = getSvgCursorPoint(e);
+      const rect = svg.getBoundingClientRect();
       const factor = e.deltaY < 0 ? 0.85 : 1.18;
 
-      const spanT = bounds.tdbMax - bounds.tdbMin;
-      const spanW = bounds.wMax - bounds.wMin;
+      const clientX = e.clientX;
+      const clientY = e.clientY;
 
-      const newSpanT = Math.min(120, Math.max(4, spanT * factor));
-      const newSpanW = Math.min(0.08, Math.max(0.001, spanW * factor));
+      setViewBox((prev) => {
+        const newWidth = Math.max(120, Math.min(3600, prev.width * factor));
+        const newHeight = (newWidth / viewBoxWidth) * viewBoxHeight;
 
-      if (chartType === 'mollier') {
-        // Mollier: X axis is Humidity Ratio W (0 to 30 g/kg), Y axis is Temperature Tbs (-10 to 50 °C)
-        const normW = Math.max(0, Math.min(1, (rawPx - margin.left) / plotWidth));
-        const normT = Math.max(0, Math.min(1, (margin.top + plotHeight - rawPy) / plotHeight));
+        const mouseRatioX = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+        const mouseRatioY = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
 
-        const cursorT = bounds.tdbMin + normT * spanT;
-        const cursorW = bounds.wMin + normW * spanW;
+        const svgMouseX = prev.x + mouseRatioX * prev.width;
+        const svgMouseY = prev.y + mouseRatioY * prev.height;
 
-        const newTMin = cursorT - normT * newSpanT;
-        const newWMin = Math.max(0, cursorW - normW * newSpanW);
-
-        setBounds({
-          tdbMin: Number(newTMin.toFixed(2)),
-          tdbMax: Number((newTMin + newSpanT).toFixed(2)),
-          wMin: Number(newWMin.toFixed(5)),
-          wMax: Number((newWMin + newSpanW).toFixed(5)),
-        });
-      } else {
-        // Carrier: X axis is Temperature Tbs (-10 to 50 °C), Y axis is Humidity Ratio W (0 to 30 g/kg)
-        const normX = Math.max(0, Math.min(1, (rawPx - margin.left) / plotWidth));
-        const normY = Math.max(0, Math.min(1, (margin.top + plotHeight - rawPy) / plotHeight));
-
-        const cursorT = bounds.tdbMin + normX * spanT;
-        const cursorW = bounds.wMin + normY * spanW;
-
-        const newTMin = cursorT - normX * newSpanT;
-        const newWMin = Math.max(0, cursorW - normY * newSpanW);
-
-        setBounds({
-          tdbMin: Number(newTMin.toFixed(2)),
-          tdbMax: Number((newTMin + newSpanT).toFixed(2)),
-          wMin: Number(newWMin.toFixed(5)),
-          wMax: Number((newWMin + newSpanW).toFixed(5)),
-        });
-      }
+        return {
+          x: svgMouseX - mouseRatioX * newWidth,
+          y: svgMouseY - mouseRatioY * newHeight,
+          width: newWidth,
+          height: newHeight,
+        };
+      });
     };
 
     svg.addEventListener('wheel', onWheelNative, { passive: false });
     return () => {
       svg.removeEventListener('wheel', onWheelNative);
     };
-  }, [bounds, margin, plotWidth, plotHeight, getSvgCursorPoint, chartType]);
+  }, [viewBoxWidth, viewBoxHeight]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
     if (draggedPointId) return;
     if (e.button !== 0) return;
     if ((e.target as HTMLElement).closest('button')) return;
     setIsPanning(true);
+    hasMovedRef.current = false;
     panStartRef.current = {
       clientX: e.clientX,
       clientY: e.clientY,
-      bounds: { ...bounds },
+      viewBox: { ...viewBox },
     };
   };
 
@@ -618,46 +615,57 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
 
     if (isPanning) {
       const rect = svgRef.current.getBoundingClientRect();
-      const scale = Math.min(rect.width / viewBoxWidth, rect.height / viewBoxHeight);
-      const plotPixelWidth = Math.max(10, plotWidth * scale);
-      const plotPixelHeight = Math.max(10, plotHeight * scale);
+      const scaleX = viewBox.width / rect.width;
+      const scaleY = viewBox.height / rect.height;
 
-      const dx = e.clientX - panStartRef.current.clientX;
-      const dy = e.clientY - panStartRef.current.clientY;
+      const dx = (e.clientX - panStartRef.current.clientX) * scaleX;
+      const dy = (e.clientY - panStartRef.current.clientY) * scaleY;
 
-      const spanT = panStartRef.current.bounds.tdbMax - panStartRef.current.bounds.tdbMin;
-      const spanW = panStartRef.current.bounds.wMax - panStartRef.current.bounds.wMin;
-
-      if (chartType === 'mollier') {
-        // In Mollier: Horizontal pan (dx) affects W, Vertical pan (dy) affects Tbs
-        const deltaW = -(dx / plotPixelWidth) * spanW;
-        const deltaT = (dy / plotPixelHeight) * spanT;
-
-        const newWMin = Math.max(0, panStartRef.current.bounds.wMin + deltaW);
-        const newTMin = panStartRef.current.bounds.tdbMin + deltaT;
-
-        setBounds({
-          tdbMin: Number(newTMin.toFixed(2)),
-          tdbMax: Number((newTMin + spanT).toFixed(2)),
-          wMin: Number(newWMin.toFixed(5)),
-          wMax: Number((newWMin + spanW).toFixed(5)),
-        });
-      } else {
-        // In Carrier: Horizontal pan (dx) affects Tbs, Vertical pan (dy) affects W
-        const deltaT = -(dx / plotPixelWidth) * spanT;
-        const deltaW = (dy / plotPixelHeight) * spanW;
-
-        const newTMin = panStartRef.current.bounds.tdbMin + deltaT;
-        const newWMin = Math.max(0, panStartRef.current.bounds.wMin + deltaW);
-
-        setBounds({
-          tdbMin: Number(newTMin.toFixed(2)),
-          tdbMax: Number((newTMin + spanT).toFixed(2)),
-          wMin: Number(newWMin.toFixed(5)),
-          wMax: Number((newWMin + spanW).toFixed(5)),
-        });
+      if (Math.hypot(dx, dy) > 2) {
+        hasMovedRef.current = true;
       }
+
+      setViewBox({
+        ...panStartRef.current.viewBox,
+        x: panStartRef.current.viewBox.x - dx,
+        y: panStartRef.current.viewBox.y - dy,
+      });
       return;
+    }
+
+    // Protractor hover detection (Carrier / Mollier)
+    if (showProtractor && !isPanning && !draggedPointId) {
+      if (chartType === 'carrier') {
+        const d = Math.hypot(rawPx - 194.6, rawPy - 75.6);
+        if (d >= 10 && d <= 125 && rawPy >= 65) {
+          const dx = rawPx - 194.6;
+          const dy = rawPy - 75.6;
+          let shrVal: number;
+          if (dx <= 0) {
+            const alpha = Math.atan2(dy, -dx);
+            shrVal = Math.max(0, Math.min(1.0, 1 / (1 + Math.tan(alpha) / 0.5723)));
+          } else {
+            const beta = Math.atan2(dy, dx);
+            shrVal = 1 / (1 - Math.tan(beta) / 0.5723);
+          }
+          setHoveredProtractorSHR(Number(shrVal.toFixed(2)));
+        } else {
+          setHoveredProtractorSHR(null);
+        }
+      } else {
+        const d = Math.hypot(rawPx - 794.0, rawPy - 480.7);
+        if (d >= 10 && d <= 95 && rawPx <= 800) {
+          const dx = 794.0 - rawPx;
+          const dy = rawPy - 480.7;
+          const gamma = Math.atan2(dy, dx);
+          const shrVal = Math.max(0, Math.min(1.0, Math.tan(gamma) / (1.27 + Math.tan(gamma))));
+          setHoveredProtractorSHR(Number(shrVal.toFixed(2)));
+        } else {
+          setHoveredProtractorSHR(null);
+        }
+      }
+    } else {
+      setHoveredProtractorSHR(null);
     }
 
     // Inspect thermodynamics under cursor if inside plot
@@ -705,11 +713,11 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
   const chartTouchStartRef = useRef<{
     touches: { x: number; y: number }[];
     distance: number;
-    bounds: { tdbMin: number; tdbMax: number; wMin: number; wMax: number };
+    viewBox: typeof DEFAULT_VIEWBOX;
   }>({
     touches: [],
     distance: 0,
-    bounds: { ...bounds },
+    viewBox: { x: 0, y: 0, width: viewBoxWidth, height: viewBoxHeight },
   });
 
   const handleTouchStart = (e: React.TouchEvent) => {
@@ -718,10 +726,11 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
     if (e.touches.length === 1) {
       const t = e.touches[0];
       setIsPanning(true);
+      hasMovedRef.current = false;
       chartTouchStartRef.current = {
         touches: [{ x: t.clientX, y: t.clientY }],
         distance: 0,
-        bounds: { ...bounds },
+        viewBox: { ...viewBox },
       };
     } else if (e.touches.length === 2) {
       const t0 = e.touches[0];
@@ -733,7 +742,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
           { x: t1.clientX, y: t1.clientY },
         ],
         distance: dist > 0 ? dist : 1,
-        bounds: { ...bounds },
+        viewBox: { ...viewBox },
       };
     }
   };
@@ -744,65 +753,45 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
     if (e.touches.length === 1 && isPanning) {
       const t = e.touches[0];
       const rect = svgRef.current.getBoundingClientRect();
-      const scale = Math.min(rect.width / viewBoxWidth, rect.height / viewBoxHeight);
-      const plotPixelWidth = Math.max(10, plotWidth * scale);
-      const plotPixelHeight = Math.max(10, plotHeight * scale);
+      const scaleX = viewBox.width / rect.width;
+      const scaleY = viewBox.height / rect.height;
 
-      const dx = t.clientX - chartTouchStartRef.current.touches[0].x;
-      const dy = t.clientY - chartTouchStartRef.current.touches[0].y;
+      const dx = (t.clientX - chartTouchStartRef.current.touches[0].x) * scaleX;
+      const dy = (t.clientY - chartTouchStartRef.current.touches[0].y) * scaleY;
 
-      const spanT = chartTouchStartRef.current.bounds.tdbMax - chartTouchStartRef.current.bounds.tdbMin;
-      const spanW = chartTouchStartRef.current.bounds.wMax - chartTouchStartRef.current.bounds.wMin;
-
-      if (chartType === 'mollier') {
-        const deltaW = -(dx / plotPixelWidth) * spanW;
-        const deltaT = (dy / plotPixelHeight) * spanT;
-
-        const newWMin = Math.max(0, chartTouchStartRef.current.bounds.wMin + deltaW);
-        const newTMin = chartTouchStartRef.current.bounds.tdbMin + deltaT;
-
-        setBounds({
-          tdbMin: Number(newTMin.toFixed(2)),
-          tdbMax: Number((newTMin + spanT).toFixed(2)),
-          wMin: Number(newWMin.toFixed(5)),
-          wMax: Number((newWMin + spanW).toFixed(5)),
-        });
-      } else {
-        const deltaT = -(dx / plotPixelWidth) * spanT;
-        const deltaW = (dy / plotPixelHeight) * spanW;
-
-        const newTMin = chartTouchStartRef.current.bounds.tdbMin + deltaT;
-        const newWMin = Math.max(0, chartTouchStartRef.current.bounds.wMin + deltaW);
-
-        setBounds({
-          tdbMin: Number(newTMin.toFixed(2)),
-          tdbMax: Number((newTMin + spanT).toFixed(2)),
-          wMin: Number(newWMin.toFixed(5)),
-          wMax: Number((newWMin + spanW).toFixed(5)),
-        });
+      if (Math.hypot(dx, dy) > 2) {
+        hasMovedRef.current = true;
       }
+
+      setViewBox({
+        ...chartTouchStartRef.current.viewBox,
+        x: chartTouchStartRef.current.viewBox.x - dx,
+        y: chartTouchStartRef.current.viewBox.y - dy,
+      });
     } else if (e.touches.length === 2 && chartTouchStartRef.current.distance > 0) {
       const t0 = e.touches[0];
       const t1 = e.touches[1];
       const currentDist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
-      const scaleFactor = chartTouchStartRef.current.distance / Math.max(10, currentDist);
+      const factor = chartTouchStartRef.current.distance / Math.max(10, currentDist);
 
-      const initBounds = chartTouchStartRef.current.bounds;
-      const spanT = initBounds.tdbMax - initBounds.tdbMin;
-      const spanW = initBounds.wMax - initBounds.wMin;
+      const initVb = chartTouchStartRef.current.viewBox;
+      const newWidth = Math.max(120, Math.min(3600, initVb.width * factor));
+      const newHeight = (newWidth / viewBoxWidth) * viewBoxHeight;
 
-      const midT = (initBounds.tdbMin + initBounds.tdbMax) / 2;
-      const midW = (initBounds.wMin + initBounds.wMax) / 2;
+      const midClientX = (t0.clientX + t1.clientX) / 2;
+      const midClientY = (t0.clientY + t1.clientY) / 2;
+      const rect = svgRef.current.getBoundingClientRect();
+      const ratioX = (midClientX - rect.left) / rect.width;
+      const ratioY = (midClientY - rect.top) / rect.height;
 
-      const newSpanT = Math.min(120, Math.max(4, spanT * scaleFactor));
-      const newSpanW = Math.min(0.08, Math.max(0.001, spanW * scaleFactor));
-      const newWMin = Math.max(0, midW - newSpanW / 2);
+      const svgMidX = initVb.x + ratioX * initVb.width;
+      const svgMidY = initVb.y + ratioY * initVb.height;
 
-      setBounds({
-        tdbMin: Number((midT - newSpanT / 2).toFixed(2)),
-        tdbMax: Number((midT + newSpanT / 2).toFixed(2)),
-        wMin: Number(newWMin.toFixed(5)),
-        wMax: Number((newWMin + newSpanW).toFixed(5)),
+      setViewBox({
+        x: svgMidX - ratioX * newWidth,
+        y: svgMidY - ratioY * newHeight,
+        width: newWidth,
+        height: newHeight,
       });
     }
   };
@@ -816,13 +805,17 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
       chartTouchStartRef.current = {
         touches: [{ x: t.clientX, y: t.clientY }],
         distance: 0,
-        bounds: { ...bounds },
+        viewBox: { ...viewBox },
       };
     }
   };
 
   const handleSvgClick = (e: React.MouseEvent) => {
-    if (draggedPointId || isPanning) return;
+    if (draggedPointId || (isPanning && hasMovedRef.current)) return;
+    if (hoveredProtractorSHR !== null) {
+      setSelectedSHR((prev) => (prev === hoveredProtractorSHR ? null : hoveredProtractorSHR));
+      return;
+    }
     if (e.detail === 2) {
       if (hoverCoords) {
         onAddPointAtCoordinates(hoverCoords.tdb, hoverCoords.w);
@@ -842,29 +835,20 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
 
   // ---------------- DYNAMIC AXES TICKS GENERATION -----------------
   const xTicks = useMemo(() => {
-    const span = bounds.tdbMax - bounds.tdbMin;
-    const step = span > 35 ? 5 : span > 15 ? 2 : span > 7 ? 1 : span > 3 ? 0.5 : 0.2;
-    const start = Math.ceil(bounds.tdbMin / step) * step;
     const ticks: number[] = [];
-    for (let t = start; t <= bounds.tdbMax + 1e-6; t += step) {
-      ticks.push(Number(t.toFixed(2)));
+    for (let t = -10; t <= 50; t += 5) {
+      ticks.push(t);
     }
     return ticks;
-  }, [bounds.tdbMin, bounds.tdbMax]);
+  }, []);
 
   const yTicks = useMemo(() => {
-    // Humidity ratio in g/kg
-    const wMinG = bounds.wMin * 1000;
-    const wMaxG = bounds.wMax * 1000;
-    const spanG = wMaxG - wMinG;
-    const stepG = spanG > 18 ? 1 : spanG > 8 ? 0.5 : spanG > 3 ? 0.2 : 0.1;
-    const startG = Math.max(0, Math.ceil(wMinG / stepG) * stepG);
     const ticks: number[] = [];
-    for (let wG = startG; wG <= wMaxG + 1e-6; wG += stepG) {
-      ticks.push(Number(wG.toFixed(2)));
+    for (let w = 0; w <= 30; w += 2) {
+      ticks.push(w);
     }
     return ticks;
-  }, [bounds.wMin, bounds.wMax]);
+  }, []);
 
   // Generate curves data (cached and strictly bounded)
   const chartCurves = useMemo(() => {
@@ -1578,17 +1562,37 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
           <span className={isSplitView ? 'hidden' : 'hidden xl:inline'}>Transportador SHR</span>
         </button>
 
-        {/* Active SHR Indicator */}
-        {selectedSHR !== null && (
-          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-[6px] bg-[#d97706]/30 border border-[#d97706]/60 text-amber-300 text-xs font-mono font-bold animate-fadeIn">
-            <span>SHR = {selectedSHR.toFixed(2)}</span>
-            <button
-              onClick={() => setSelectedSHR(null)}
-              className="text-amber-400 hover:text-white ml-0.5 p-0.5 rounded hover:bg-amber-900/50"
-              title="Borrar recta de maniobra SHR"
-            >
-              ✕
-            </button>
+        {/* Active SHR Indicator & Quick Presets */}
+        {showProtractor && (
+          <div className="flex items-center gap-1 px-2 py-0.5 rounded-[6px] bg-amber-950/40 border border-amber-800/40 text-amber-300 text-xs font-mono animate-fadeIn">
+            <span className="font-semibold text-amber-400 text-[11px]">
+              {selectedSHR !== null ? `SHR: ${selectedSHR.toFixed(2)}` : 'FCS/SHR:'}
+            </span>
+            <div className="flex items-center gap-0.5">
+              {[0.65, 0.70, 0.75, 0.80, 0.85, 1.00].map((preset) => (
+                <button
+                  key={preset}
+                  onClick={() => setSelectedSHR((prev) => (prev === preset ? null : preset))}
+                  className={`px-1 py-0.2 text-[10px] font-semibold rounded transition-colors ${
+                    selectedSHR === preset
+                      ? 'bg-amber-400 text-slate-950 font-bold shadow'
+                      : 'hover:bg-amber-900/60 text-amber-200/90'
+                  }`}
+                  title={`Fijar recta de maniobra con SHR = ${preset.toFixed(2)}`}
+                >
+                  {preset === 1 ? '1.0' : preset.toFixed(2).replace('0.', '.')}
+                </button>
+              ))}
+            </div>
+            {selectedSHR !== null && (
+              <button
+                onClick={() => setSelectedSHR(null)}
+                className="text-amber-400 hover:text-white ml-0.5 p-0.5 rounded hover:bg-amber-900/60 transition-colors"
+                title="Borrar recta de maniobra SHR"
+              >
+                ✕
+              </button>
+            )}
           </div>
         )}
 
@@ -1616,6 +1620,10 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
         >
           <ZoomOut className="w-3.5 h-3.5" />
         </button>
+
+        <span className="text-[10px] font-mono text-slate-300 min-w-[32px] text-center select-none" title="Nivel de zoom">
+          {Math.round((viewBoxWidth / viewBox.width) * 100)}%
+        </span>
 
         {/* Zoom In */}
         <button
@@ -1786,7 +1794,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
       {/* Main SVG Canvas: Diagram takes full container width and height */}
       <svg
         ref={svgRef}
-        viewBox={`0 0 ${viewBoxWidth} ${viewBoxHeight}`}
+        viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.width} ${viewBox.height}`}
         className={`w-full h-full touch-none select-none ${isPanning ? 'cursor-grabbing' : 'cursor-crosshair'}`}
         preserveAspectRatio="xMidYMid meet"
         onMouseDown={handleMouseDown}
@@ -1866,6 +1874,159 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
             isDark={themeStyles.isDark}
             innerPlotTransform={innerPlotTransform}
           />
+        )}
+
+        {/* Interactive 180° Protractor Needle & Click/Hover Overlay for Carrier */}
+        {showProtractor && chartType === 'carrier' && (
+          <g className="carrier-protractor-interactive">
+            {/* Transparent clickable hit area matching the exact 180° semi-circular protractor */}
+            <path
+              d="M 88 75.6 A 108 108 0 0 0 302 75.6 Z"
+              fill="transparent"
+              className="cursor-pointer pointer-events-auto"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (hoveredProtractorSHR !== null) {
+                  setSelectedSHR((prev) => (prev === hoveredProtractorSHR ? null : hoveredProtractorSHR));
+                }
+              }}
+            />
+
+            {/* Active / Hovered Angle Needle on the 180° Protractor */}
+            {activeSHR !== null && (() => {
+              const shr = activeSHR;
+              const isCooling = shr >= 0 && shr <= 1.0;
+              const alpha = isCooling
+                ? Math.atan(0.5723 * (1 - shr) / Math.max(0.0001, shr))
+                : Math.atan(0.5723 * Math.abs((1 - shr) / shr));
+              const cosA = Math.cos(alpha);
+              const sinA = Math.sin(alpha);
+              const rayEndX = isCooling ? 194.6 - 102.0 * cosA : 194.6 + 102.0 * cosA;
+              const rayEndY = 75.6 + 102.0 * sinA;
+
+              return (
+                <g className="carrier-protractor-needle pointer-events-none">
+                  {/* Origin hub */}
+                  <circle cx="194.6" cy="75.6" r="4" fill="#F59E0B" />
+                  <circle cx="194.6" cy="75.6" r="7" fill="none" stroke="#F59E0B" strokeWidth="1.2" />
+
+                  {/* Needle ray across the 180° protractor */}
+                  <line
+                    x1="194.6"
+                    y1="75.6"
+                    x2={rayEndX}
+                    y2={rayEndY}
+                    stroke="#F59E0B"
+                    strokeWidth="2.5"
+                  />
+
+                  {/* Pointer bead on the 180° perimeter arc */}
+                  <circle cx={rayEndX} cy={rayEndY} r="5" fill="#F59E0B" stroke="#FFFFFF" strokeWidth="1.5" />
+                  <circle cx={rayEndX} cy={rayEndY} r="8.5" fill="none" stroke="#F59E0B" strokeWidth="1" strokeDasharray="2,2" />
+
+                  {/* SHR Value Tag near perimeter */}
+                  <g transform={`translate(${rayEndX + (isCooling ? -16 : 16)}, ${rayEndY + 16})`}>
+                    <rect
+                      x="-38"
+                      y="-12"
+                      width="76"
+                      height="18"
+                      rx="4"
+                      fill={themeStyles.isDark ? 'rgba(15,23,42,0.95)' : 'rgba(255,255,255,0.95)'}
+                      stroke="#F59E0B"
+                      strokeWidth="1.2"
+                      filter="drop-shadow(0 2px 4px rgba(0,0,0,0.5))"
+                    />
+                    <text
+                      x="0"
+                      y="1.5"
+                      textAnchor="middle"
+                      fill="#F59E0B"
+                      fontSize="9"
+                      fontWeight="bold"
+                      fontFamily="monospace"
+                    >
+                      SHR {shr.toFixed(2)}
+                    </text>
+                  </g>
+                </g>
+              );
+            })()}
+          </g>
+        )}
+
+        {/* Interactive 180° Protractor Needle & Click/Hover Overlay for Mollier */}
+        {showProtractor && chartType === 'mollier' && (
+          <g className="mollier-protractor-interactive">
+            {/* Transparent clickable hit area matching the exact 180° semi-circular protractor */}
+            <path
+              d="M 794.0 404 A 78 78 0 0 0 794.0 558 Z"
+              fill="transparent"
+              className="cursor-pointer pointer-events-auto"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (hoveredProtractorSHR !== null) {
+                  setSelectedSHR((prev) => (prev === hoveredProtractorSHR ? null : hoveredProtractorSHR));
+                }
+              }}
+            />
+
+            {/* Active / Hovered Angle Needle on the 180° Protractor */}
+            {activeSHR !== null && (() => {
+              const shr = activeSHR;
+              const gamma = Math.atan(1.27 * shr / Math.max(0.001, 1 - shr));
+              const rayEndX = 794.0 - 72.0 * Math.cos(gamma);
+              const rayEndY = 480.7 + 72.0 * Math.sin(gamma);
+
+              return (
+                <g className="mollier-protractor-needle pointer-events-none">
+                  {/* Origin hub */}
+                  <circle cx="794.0" cy="480.7" r="3.5" fill="#F59E0B" />
+                  <circle cx="794.0" cy="480.7" r="6.5" fill="none" stroke="#F59E0B" strokeWidth="1.2" />
+
+                  {/* Needle ray across the 180° protractor */}
+                  <line
+                    x1="794.0"
+                    y1="480.7"
+                    x2={rayEndX}
+                    y2={rayEndY}
+                    stroke="#F59E0B"
+                    strokeWidth="2.5"
+                  />
+
+                  {/* Pointer bead on the 180° perimeter arc */}
+                  <circle cx={rayEndX} cy={rayEndY} r="4.5" fill="#F59E0B" stroke="#FFFFFF" strokeWidth="1.5" />
+                  <circle cx={rayEndX} cy={rayEndY} r="8" fill="none" stroke="#F59E0B" strokeWidth="1" strokeDasharray="2,2" />
+
+                  {/* SHR Value Tag */}
+                  <g transform={`translate(${rayEndX - 26}, ${rayEndY})`}>
+                    <rect
+                      x="-38"
+                      y="-10"
+                      width="76"
+                      height="18"
+                      rx="4"
+                      fill={themeStyles.isDark ? 'rgba(15,23,42,0.95)' : 'rgba(255,255,255,0.95)'}
+                      stroke="#F59E0B"
+                      strokeWidth="1.2"
+                      filter="drop-shadow(0 2px 4px rgba(0,0,0,0.5))"
+                    />
+                    <text
+                      x="0"
+                      y="3"
+                      textAnchor="middle"
+                      fill="#F59E0B"
+                      fontSize="9"
+                      fontWeight="bold"
+                      fontFamily="monospace"
+                    >
+                      SHR {shr.toFixed(2)}
+                    </text>
+                  </g>
+                </g>
+              );
+            })()}
+          </g>
         )}
 
         {/* 2. Interactive Diagram Contents (Scaled & Panned strictly inside plot area) */}
@@ -2365,6 +2526,106 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
               })}
           </g>
 
+          {/* Room Condition Line (Recta de Maniobra) & ADP intersection */}
+          {showProtractor && activeSHR !== null && activeSHR > 0 && activeSHR <= 1.0 && (() => {
+            const refPt = getAshraeReferencePoint(pressure);
+            const targetPt = selectedPointId
+              ? points.find((p) => p.id === selectedPointId) || { id: 'ref', name: 'Punto Ref. ASHRAE (24°C / 50%)', tdb: refPt.tdb, w: refPt.w }
+              : { id: 'ref', name: 'Punto Ref. ASHRAE (24°C / 50%)', tdb: refPt.tdb, w: refPt.w };
+
+            const dWdT = getSlopeFromSHR(activeSHR);
+            const adp = calculateADP(targetPt.tdb, targetPt.w, activeSHR, pressure);
+
+            // Starting point at ADP on saturation curve
+            const [startX, startY] = adp
+              ? coordToPixel(adp.tdbAdp, adp.wAdp)
+              : coordToPixel(Math.max(-10, targetPt.tdb - 18), Math.max(0, targetPt.w - dWdT * 18));
+
+            // Extend towards warmer temperatures
+            const tHigh = Math.min(50, targetPt.tdb + 12);
+            const wHigh = targetPt.w + dWdT * (tHigh - targetPt.tdb);
+            const [endX, endY] = coordToPixel(tHigh, Math.max(0, wHigh));
+            const [targetX, targetY] = coordToPixel(targetPt.tdb, targetPt.w);
+
+            return (
+              <g className="shr-maneuver-rcl pointer-events-none">
+                {/* Dashed guideline: complete Recta de Maniobra */}
+                <line
+                  x1={startX}
+                  y1={startY}
+                  x2={endX}
+                  y2={endY}
+                  stroke="#F59E0B"
+                  strokeWidth="2.2"
+                  strokeDasharray="6,4"
+                />
+
+                {/* Solid emphasis line connecting ADP directly to the active room state point */}
+                <line
+                  x1={startX}
+                  y1={startY}
+                  x2={targetX}
+                  y2={targetY}
+                  stroke="#F59E0B"
+                  strokeWidth="3.2"
+                />
+
+                {/* Room Target Point Highlight */}
+                <circle cx={targetX} cy={targetY} r="5" fill="#F59E0B" />
+                <circle cx={targetX} cy={targetY} r="9" fill="none" stroke="#F59E0B" strokeWidth="1.5" />
+
+                {/* Target Point Condition Label */}
+                <g transform={`translate(${targetX + 16}, ${targetY - 12})`}>
+                  <rect
+                    x="-4"
+                    y="-11"
+                    width="200"
+                    height="20"
+                    rx="4"
+                    fill={themeStyles.isDark ? 'rgba(15,23,42,0.95)' : 'rgba(255,255,255,0.95)'}
+                    stroke="#F59E0B"
+                    strokeWidth="1.2"
+                    filter="drop-shadow(0 2px 4px rgba(0,0,0,0.4))"
+                  />
+                  <text
+                    x="6"
+                    y="3"
+                    fill="#F59E0B"
+                    fontSize="9"
+                    fontWeight="bold"
+                    fontFamily="monospace"
+                  >
+                    Recta Maniobra SHR={activeSHR.toFixed(2)} · {selectedPointId ? (points.find((p) => p.id === selectedPointId)?.name || 'Punto') : '24°C / 50% HR'}
+                  </text>
+                </g>
+
+                {/* Apparatus Dew Point (ADP / Punto de Rocío del Aparato) Badge on saturation curve */}
+                {adp && (
+                  <g transform={`translate(${startX}, ${startY})`}>
+                    <circle r="5" fill="#EF4444" />
+                    <circle r="9" fill="none" stroke="#EF4444" strokeWidth="1.5" strokeDasharray="3,2" />
+                    <g transform="translate(14, -6)">
+                      <rect
+                        x="-4"
+                        y="-10"
+                        width="168"
+                        height="20"
+                        rx="4"
+                        fill={themeStyles.isDark ? 'rgba(15,23,42,0.95)' : 'rgba(254,242,242,0.95)'}
+                        stroke="#EF4444"
+                        strokeWidth="1.2"
+                        filter="drop-shadow(0 2px 4px rgba(0,0,0,0.4))"
+                      />
+                      <text x="6" y="4" fill="#EF4444" fontSize="9" fontWeight="bold" fontFamily="monospace">
+                        ADP: {adp.tdbAdp.toFixed(1)}°C · {(adp.wAdp * 1000).toFixed(1)}g/kg
+                      </text>
+                    </g>
+                  </g>
+                )}
+              </g>
+            );
+          })()}
+
         </g>
 
         {/* Dynamic Precision Crosshairs and Alignment Indicators */}
@@ -2581,7 +2842,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
                   x={margin.left + plotWidth + 50}
                   y={margin.top + plotHeight / 2}
                   textAnchor="middle"
-                  transform={`rotate(90, ${margin.left + plotWidth + 50}, ${margin.top + plotHeight / 2})`}
+                  transform={`rotate(-90, ${margin.left + plotWidth + 50}, ${margin.top + plotHeight / 2})`}
                   fill={themeStyles.axisLabel}
                   fontSize="11"
                   fontWeight="bold"

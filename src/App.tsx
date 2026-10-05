@@ -615,6 +615,12 @@ export default function App() {
                   onToggleLayer={handleToggleLayer}
                   isolatedProcessInfo={isolatedProcessInfo}
                   onSetIsolatedProcessInfo={setIsolatedProcessInfo}
+                  activeTab={sidebarActiveTab}
+                  onTabChange={setSidebarActiveTab}
+                  onLoadArchetype={(id) => {
+                    handleLoadArchetypeFromSidebar(id);
+                    setIsMobileSidebarOpen(false);
+                  }}
                 />
               </div>
             </div>
