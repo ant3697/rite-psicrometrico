@@ -14,6 +14,8 @@ export interface PsychroInputs {
   h?: number;   // kJ/kg or BTU/lb
 }
 
+export type PsychroParamKey = 'tdb' | 'rh' | 'h' | 'w' | 'twb' | 'tdp' | 'v';
+
 export interface StatePoint {
   id: string;
   name: string;
@@ -32,6 +34,9 @@ export interface StatePoint {
   volumeFlow: number; // m³/h (SI) or CFM (IP)
   massFlow: number;   // kg/s dry air
   isLocked?: boolean;
+  hidden?: boolean;   // Whether point is hidden from chart rendering
+  fixedParams?: PsychroParamKey[];
+  fixedValues?: Partial<Record<PsychroParamKey, number>>;
 }
 
 export type ProcessType =
@@ -57,12 +62,146 @@ export interface ProcessConnection {
   adp?: number;                  // Apparatus Dew Point (°C)
   efficiency?: number;           // Heat recovery efficiency (e.g. 0.75 for 75%)
   color?: string;
+  // Specific process airflow & condition tracking (OTS Psychrochart feature):
+  volumeFlow?: number;           // Airflow rate for this process (m³/h or CFM)
+  massFlow?: number;             // Mass flow dry air (kg/s)
+  conditionId?: string;          // Associated operating condition/scenario ID
   // Computed thermodynamic process metrics:
   qSensible: number;             // kW
   qLatent: number;               // kW
   qTotal: number;                // kW
   moistureExchange: number;      // kg/h (positive = added moisture, negative = condensed moisture)
   shr: number;                   // Sensible Heat Ratio = Qs / Qt
+  // Frost & coil freeze risk diagnostics:
+  isFrostRisk?: boolean;         // True if surface / ADP / exit air < 0°C with condensation
+  frostRateKgH?: number;         // kg/h of frost/ice accumulation
+}
+
+export interface CoilSimulationResult {
+  isSensibleOnly: boolean;       // True if coil surface >= entering dew point (no dehumidification)
+  adp: number;                   // Apparatus Dew Point (°C)
+  wAdp: number;                  // Saturation humidity ratio at ADP (kg/kg)
+  hAdp: number;                  // Saturation enthalpy at ADP (kJ/kg)
+  bypassFactor: number;          // Coil Bypass Factor BF (0..1)
+  contactFactor: number;         // Contact Factor CF = 1 - BF
+  // Leaving air thermodynamic state
+  exitTdb: number;               // °C
+  exitW: number;                 // kg/kg
+  exitRh: number;                // %
+  exitTwb: number;               // °C
+  exitTdp: number;               // °C
+  exitEnthalpy: number;          // kJ/kg
+  exitSpecVol: number;           // m³/kg
+  // Thermal capacities & sizing
+  massFlowKgS: number;           // kg/s dry air
+  qSensibleKw: number;           // kW
+  qLatentKw: number;             // kW
+  qTotalKw: number;              // kW
+  shr: number;                   // Sensible Heat Ratio
+  condensateRateKgH: number;     // kg/h or L/h of condensed water
+  // Frost risk & defrost analysis (OTS feature)
+  isFrostRisk: boolean;          // True if ADP <= 0°C with condensation
+  frostRateKgH: number;          // kg/h of frost/ice accumulation on fins
+  defrostHeatingLoadKw?: number; // kW recommended defrost thermal power
+}
+
+export interface AirMixingResult {
+  // Mass & flow metrics:
+  massFlow1: number;             // kg/s dry air stream 1
+  massFlow2: number;             // kg/s dry air stream 2
+  totalMassFlow: number;         // kg/s dry air mixed
+  totalVolumeFlow: number;       // m³/h total mixed volumetric flow
+  volumeRatio2Percent: number;   // % Outdoor air volumetric fraction
+  massRatio1: number;            // 0..1 mass fraction stream 1
+  massRatio2: number;            // 0..1 mass fraction stream 2
+  // Mixed air psychrometric properties:
+  mixedTdb: number;              // °C
+  mixedW: number;                // kg/kg
+  mixedRh: number;               // %
+  mixedH: number;                // kJ/kg
+  mixedTwb: number;              // °C
+  mixedTdp: number;              // °C
+  mixedSpecVol: number;          // m³/kg
+  // Physical phenomena checks:
+  isFogRisk: boolean;            // Supersaturation in mixing chamber (RH > 100%)
+  fogMoistureRateKgH: number;    // Condensed fog/mist water rate (kg/h)
+  // Economizer / Free-Cooling diagnostic:
+  isFreeCoolingViable: boolean;
+  freeCoolingPotentialKw: number;
+}
+
+export interface ShrSizingResult {
+  // SHR metrics
+  rshr: number;                  // Room Sensible Heat Ratio (RSHR = Qs_room / Qt_room)
+  roomSensibleKw: number;        // kW
+  roomLatentKw: number;          // kW
+  roomTotalKw: number;           // kW
+  gshr: number;                  // Grand Sensible Heat Ratio (GSHR = Qs_total / Qt_total)
+  grandSensibleKw: number;       // kW
+  grandLatentKw: number;         // kW
+  grandTotalKw: number;          // kW
+  // Coil Apparatus Dew Point
+  adp: number;                   // °C (Coil Apparatus Dew Point)
+  wAdp: number;                  // kg/kg
+  hAdp: number;                  // kJ/kg
+  bypassFactor: number;          // Coil Bypass Factor (BF)
+  contactFactor: number;         // Contact Factor (CF = 1 - BF)
+  // Room condition
+  roomTdb: number;               // °C
+  roomW: number;                 // kg/kg
+  roomRh: number;                // %
+  roomH: number;                 // kJ/kg
+  // Supply air condition
+  supplyTdb: number;             // °C
+  supplyW: number;               // kg/kg
+  supplyRh: number;              // %
+  supplyTwb: number;             // °C
+  supplyH: number;               // kJ/kg
+  deltaTSupply: number;          // °C (Troom - Tsupply)
+  // Outdoor and mixed air condition
+  outdoorTdb: number;            // °C
+  outdoorW: number;              // kg/kg
+  outdoorRh: number;             // %
+  outdoorAirRatio: number;       // 0..1 (fraction of outdoor air)
+  mixedTdb: number;              // °C
+  mixedW: number;                // kg/kg
+  mixedRh: number;               // %
+  mixedH: number;                // kJ/kg
+  // Airflow rates
+  requiredMassFlowKgS: number;   // kg/s dry air
+  requiredAirflowM3h: number;    // m³/h
+  requiredAirflowCfm: number;    // CFM
+  // Coil cooling capacities
+  coilCoolingTotalKw: number;    // kW
+  coilCoolingSensibleKw: number; // kW
+  coilCoolingLatentKw: number;   // kW
+  coilCondensateRateKgH: number; // kg/h or L/h
+  coilTonsRefrigeration: number; // TR
+  // Altitude derating
+  airDensity: number;            // kg/m³
+  densityDeratingFactor: number; // relative to sea level 1.204 kg/m³
+}
+
+export interface ElevationPreset {
+  name: string;
+  altitudeM: number;
+  altitudeFt: number;
+  pressureKPa: number;
+  pressurePsia: number;
+  deratingPercent: number;       // e.g. -7.0%
+  description: string;
+}
+
+export interface OperatingCondition {
+  id: string;
+  name: string;
+  description?: string;
+  color: string;                 // Distinctive color tag & overlay stroke
+  isActive: boolean;             // True if currently active / editable
+  isOverlayVisible: boolean;     // True if visible on psychrometric chart as comparison overlay
+  points: StatePoint[];
+  processes: ProcessConnection[];
+  airflowMultiplier?: number;    // E.g. 1.0 (100% full design), 0.6 (60% part load)
 }
 
 export interface AtmosphereConfig {
@@ -88,10 +227,18 @@ export interface ChartLayerVisibility {
   comfortEnCat2: boolean;         // UNE-EN 16798-1 / ISO 7730 Cat II (Nivel normal nuevo/RITE / PPD < 10%)
   comfortEnCat3: boolean;         // UNE-EN 16798-1 / ISO 7730 Cat III (Nivel moderado / PPD < 15%)
   comfortEnSeason: 'summer' | 'winter'; // Temporada Europea
+  comfortRite?: boolean;          // Zona Confort RITE Oficial (IT 1.1.4.1.1)
+  comfortGivoni?: boolean;        // Confort Bioclimático Givoni (Ventilación y Pasivo)
   processes: boolean;
   pointLabels: boolean;
   shrProtractor: boolean;
   grid: boolean;
+  enthalpyDeviations?: boolean;   // Curvas de Desviación de Entalpía ASHRAE
+  satEnthalpyScale?: boolean;     // Escala Perimetral de Entalpía de Saturación (kJ/kg)
+  shfScale?: boolean;             // Escala Vertical Derecha de Factor de Calor Sensible (FCS / SHR)
+  satTempScale?: boolean;         // Graduaciones de Temperatura de Saturación (°C)
+  allReferenceRays?: boolean;     // Haz completo de líneas de referencia ASHRAE (FCS / SHR 0.00 a 1.00)
+  oversaturatedZone?: boolean;    // Sombreado tramado de la zona supersaturada (W > Wsat) tipo psychrochart
 }
 
 export type AHUModuleType =

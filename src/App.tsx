@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import {
   AirVent,
   LineChart,
@@ -9,6 +9,8 @@ import {
   X,
   ChevronRight,
   LayoutTemplate,
+  GraduationCap,
+  Layers as LayersIcon,
 } from 'lucide-react';
 import {
   StatePoint,
@@ -20,15 +22,21 @@ import {
   AtmosphereConfig,
   PresetCycle,
   IsolatedProcessInfo,
+  OperatingCondition,
 } from './types/psychrometrics';
 import {
   solveStatePoint,
   P_ATM_STANDARD,
   pressureFromAltitude,
+  getSaturationHumidityRatio,
+  getWFromTdbRh,
+  getWFromEnthalpy,
+  getWFromTdbTwb,
 } from './utils/psychrolib';
 import {
   calculateProcessMetrics,
   PRESET_CYCLES,
+  createDefaultOperatingConditions,
 } from './utils/processEngine';
 import { TopBar } from './components/TopBar';
 import { PsychrometricChart } from './components/PsychrometricChart';
@@ -42,10 +50,16 @@ import { PresetsModal } from './components/PresetsModal';
 import { ExportModal } from './components/ExportModal';
 import { AiAssistantModal } from './components/AiAssistantModal';
 import { IDAEComplianceModal } from './components/IDAEComplianceModal';
+import { TeachingWorkspace } from './components/TeachingWorkspace';
+import { ConditionsModal } from './components/ConditionsModal';
+import { CoilModelerModal } from './components/CoilModelerModal';
+import { AirMixingModal } from './components/AirMixingModal';
+import { ShrCoilSizingModal } from './components/ShrCoilSizingModal';
+import { CommandPalette } from './components/CommandPalette';
 
 export default function App() {
-  // Navigation & View: default view is 'schematic' (Esquema Físico & UTA)
-  const [currentView, setCurrentView] = useState<'chart' | 'points' | 'processes' | 'comfort' | 'schematic'>('schematic');
+  // Navigation & View: default view is 'teaching' (Aula Docente)
+  const [currentView, setCurrentView] = useState<'chart' | 'points' | 'processes' | 'comfort' | 'schematic' | 'teaching'>('teaching');
   const [chartType, setChartType] = useState<ChartType>('carrier');
   const [units, setUnits] = useState<UnitSystem>('SI');
 
@@ -69,7 +83,7 @@ export default function App() {
     comfortEnSeason: 'summer',
     processes: true,
     pointLabels: true,
-    shrProtractor: true,
+    shrProtractor: false,
     grid: true,
   });
 
@@ -81,87 +95,103 @@ export default function App() {
   const [isIdaeModalOpen, setIsIdaeModalOpen] = useState(false);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
-  const [sidebarActiveTab, setSidebarActiveTab] = useState<'points' | 'processes' | 'layers' | 'archetypes'>('points');
+  const [sidebarActiveTab, setSidebarActiveTab] = useState<'points' | 'processes' | 'layers' | 'archetypes' | 'scenarios'>('points');
   const [pendingArchetypeId, setPendingArchetypeId] = useState<string | null>(null);
+
+  // Operating Conditions (OTS Psychrochart Feature A)
+  const [conditions, setConditions] = useState<OperatingCondition[]>(() =>
+    createDefaultOperatingConditions(P_ATM_STANDARD)
+  );
+  const [activeConditionId, setActiveConditionId] = useState<string>('sc-summer-design');
+  const [isConditionsModalOpen, setIsConditionsModalOpen] = useState(false);
+
+  // OTS Psychrochart Features C, D & E Modals
+  const [isCoilModelerModalOpen, setIsCoilModelerModalOpen] = useState(false);
+  const [isAirMixingModalOpen, setIsAirMixingModalOpen] = useState(false);
+  const [isShrModalOpen, setIsShrModalOpen] = useState(false);
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+
+  // Global keyboard shortcut for Command Palette (⌘K / Ctrl+K)
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setIsCommandPaletteOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, []);
+
+  const handleApplyCoilProcess = useCallback((newPoint: StatePoint, newProcess: ProcessConnection) => {
+    setPoints((prev) => [...prev, newPoint]);
+    setProcesses((prev) => [...prev, newProcess]);
+    setSelectedPointId(newPoint.id);
+  }, []);
+
+  const handleApplyMixingProcess = useCallback(
+    (
+      mixedPoint: StatePoint,
+      procFromStream1: ProcessConnection,
+      procFromStream2: ProcessConnection
+    ) => {
+      setPoints((prev) => [...prev, mixedPoint]);
+      setProcesses((prev) => [...prev, procFromStream1, procFromStream2]);
+      setSelectedPointId(mixedPoint.id);
+    },
+    []
+  );
+
+  const handleApplyShrCycle = useCallback(
+    (newPoints: StatePoint[], newProcesses: ProcessConnection[]) => {
+      setPoints((prev) => [...prev, ...newPoints]);
+      setProcesses((prev) => [...prev, ...newProcesses]);
+      if (newPoints.length > 0) {
+        setSelectedPointId(newPoints[0].id);
+      }
+      setCurrentView('chart');
+    },
+    []
+  );
 
   const handleLoadArchetypeFromSidebar = useCallback((archetypeId: string) => {
     setPendingArchetypeId(archetypeId);
     setCurrentView('schematic');
   }, []);
 
-  // Initialize with the standard Summer AC Preset
+  // Initialize with the standard active Operating Condition
   const [points, setPoints] = useState<StatePoint[]>(() => {
-    const defaultPreset = PRESET_CYCLES[0];
-    return defaultPreset.points.map((p, idx) =>
-      solveStatePoint(p.inputs, P_ATM_STANDARD, {
-        id: `pt-${idx + 1}`,
-        name: p.name,
-        color: p.color,
-        volumeFlow: p.volumeFlow || 3000,
-      })
-    );
+    const defaultConditions = createDefaultOperatingConditions(P_ATM_STANDARD);
+    return defaultConditions[0].points;
   });
 
   const [processes, setProcesses] = useState<ProcessConnection[]>(() => {
-    const defaultPreset = PRESET_CYCLES[0];
-    return defaultPreset.processes.map((proc, idx) => {
-      const fromPt = points ? points[proc.fromIndex] : undefined;
-      const toPt = points ? points[proc.toIndex] : undefined;
-
-      const metrics =
-        fromPt && toPt
-          ? calculateProcessMetrics(fromPt, toPt, fromPt.massFlow)
-          : {
-              qSensible: 0,
-              qLatent: 0,
-              qTotal: 0,
-              moistureExchange: 0,
-              shr: 1,
-              adp: undefined,
-              bypassFactor: proc.bypassFactor,
-            };
-
-      return {
-        id: `proc-${idx + 1}`,
-        name: proc.name,
-        type: proc.type,
-        fromPointId: `pt-${proc.fromIndex + 1}`,
-        toPointId: `pt-${proc.toIndex + 1}`,
-        secondaryFromPointId: proc.secondaryFromIndex
-          ? `pt-${proc.secondaryFromIndex + 1}`
-          : undefined,
-        mixingRatio: proc.mixingRatio,
-        bypassFactor: proc.bypassFactor,
-        color:
-          proc.type === 'cooling_dehumid'
-            ? '#38BDF8'
-            : proc.type === 'sensible_heating'
-            ? '#F97316'
-            : proc.type === 'mixing'
-            ? '#F59E0B'
-            : '#8B5CF6',
-        ...metrics,
-      };
-    });
+    const defaultConditions = createDefaultOperatingConditions(P_ATM_STANDARD);
+    return defaultConditions[0].processes;
   });
 
-  const [selectedPointId, setSelectedPointId] = useState<string | null>('pt-1');
+  const [selectedPointId, setSelectedPointId] = useState<string | null>('sc1-pt-1');
   const [isolatedProcessInfo, setIsolatedProcessInfo] = useState<IsolatedProcessInfo | null>(null);
 
-  // Recalculate processes when points or atmospheric pressure update
+  // Recalculate processes when points or process custom airflows update (Feature B)
   const updatedProcesses = useMemo(() => {
     return processes.map((proc) => {
       const ptFrom = points.find((p) => p.id === proc.fromPointId);
       const ptTo = points.find((p) => p.id === proc.toPointId);
       if (!ptFrom || !ptTo) return proc;
 
-      const metrics = calculateProcessMetrics(ptFrom, ptTo, ptFrom.massFlow);
+      const metrics = calculateProcessMetrics(ptFrom, ptTo, proc.massFlow, proc.volumeFlow);
       return {
         ...proc,
         ...metrics,
       };
     });
   }, [points, processes]);
+
+  // Overlay conditions for multi-scenario visualization on the chart
+  const overlayConditions = useMemo(() => {
+    return conditions.filter((c) => c.isOverlayVisible && c.id !== activeConditionId);
+  }, [conditions, activeConditionId]);
 
   // Recalculate points if atmospheric pressure changes
   const handleUpdateAtmosphere = (newPressure: number, newAltitude: number) => {
@@ -226,12 +256,33 @@ export default function App() {
     );
   };
 
-  // Dragging point directly on chart
+  // Dragging point directly on chart or nudging with arrow keys
   const handleUpdatePointCoordinates = (id: string, tdb: number, w: number) => {
     setPoints((prev) =>
       prev.map((p) => {
         if (p.id !== id) return p;
-        return solveStatePoint({ mode: 'tdb_w', tdb, w }, atmosphere.pressure, p);
+        if (p.isLocked || (p.fixedParams && p.fixedParams.length >= 2)) {
+          return p;
+        }
+        let targetTdb = tdb;
+        let targetW = w;
+        if (p.fixedParams?.includes('w')) {
+          targetW = p.fixedValues?.w ?? p.w;
+        } else if (p.fixedParams?.includes('tdb')) {
+          targetTdb = p.fixedValues?.tdb ?? p.tdb;
+        } else if (p.fixedParams?.includes('rh')) {
+          const fixedRh = p.fixedValues?.rh ?? p.rh;
+          targetW = getWFromTdbRh(targetTdb, fixedRh, atmosphere.pressure);
+        } else if (p.fixedParams?.includes('h')) {
+          const fixedH = p.fixedValues?.h ?? p.h;
+          targetW = getWFromEnthalpy(targetTdb, fixedH);
+        } else if (p.fixedParams?.includes('twb')) {
+          const fixedTwb = p.fixedValues?.twb ?? p.twb;
+          targetW = getWFromTdbTwb(targetTdb, Math.min(targetTdb, fixedTwb), atmosphere.pressure);
+        }
+        const ws = getSaturationHumidityRatio(targetTdb, atmosphere.pressure);
+        targetW = Math.max(0.0001, Math.min(ws, targetW));
+        return solveStatePoint({ mode: 'tdb_w', tdb: targetTdb, w: targetW }, atmosphere.pressure, p);
       })
     );
   };
@@ -247,6 +298,13 @@ export default function App() {
       const remaining = points.filter((p) => p.id !== id);
       setSelectedPointId(remaining[0]?.id || null);
     }
+  };
+
+  // Toggle hide / show point on chart
+  const handleToggleHidePoint = (id: string) => {
+    setPoints((prev) =>
+      prev.map((p) => (p.id === id ? { ...p, hidden: !p.hidden } : p))
+    );
   };
 
   // Add process
@@ -298,6 +356,140 @@ export default function App() {
   const handleDeleteProcess = (id: string) => {
     setProcesses((prev) => prev.filter((p) => p.id !== id));
   };
+
+  // Direct Process Airflow update (OTS Psychrochart Feature B)
+  const handleUpdateProcessAirflow = useCallback((procId: string, flowM3h: number) => {
+    setProcesses((prev) =>
+      prev.map((proc) => {
+        if (proc.id !== procId) return proc;
+        const ptFrom = points.find((p) => p.id === proc.fromPointId);
+        const ptTo = points.find((p) => p.id === proc.toPointId);
+        if (!ptFrom || !ptTo) return { ...proc, volumeFlow: flowM3h };
+        const metrics = calculateProcessMetrics(ptFrom, ptTo, undefined, flowM3h);
+        return {
+          ...proc,
+          ...metrics,
+        };
+      })
+    );
+  }, [points]);
+
+  // Operating Conditions handlers (OTS Psychrochart Feature A)
+  const handleSelectCondition = useCallback((newCondId: string) => {
+    setConditions((prevConds) => {
+      const updated = prevConds.map((c) =>
+        c.id === activeConditionId
+          ? { ...c, points: [...points], processes: [...processes], isActive: false }
+          : c.id === newCondId
+          ? { ...c, isActive: true }
+          : c
+      );
+      const target = updated.find((c) => c.id === newCondId);
+      if (target) {
+        setPoints(target.points);
+        setProcesses(target.processes);
+        setSelectedPointId(target.points[0]?.id || null);
+      }
+      return updated;
+    });
+    setActiveConditionId(newCondId);
+  }, [activeConditionId, points, processes]);
+
+  const handleToggleOverlayCondition = useCallback((condId: string) => {
+    setConditions((prev) =>
+      prev.map((c) => (c.id === condId ? { ...c, isOverlayVisible: !c.isOverlayVisible } : c))
+    );
+  }, []);
+
+  const handleAddCondition = useCallback((name: string, baseConditionId?: string) => {
+    const base = conditions.find((c) => c.id === baseConditionId) || conditions[0];
+    const newId = `sc-${Date.now()}`;
+    const colors = ['#F59E0B', '#EC4899', '#8B5CF6', '#14B8A6', '#06B6D4', '#EF4444'];
+    const assignedColor = colors[conditions.length % colors.length];
+
+    const clonedPoints = base.points.map((p, idx) => ({
+      ...p,
+      id: `${newId}-pt-${idx + 1}`,
+    }));
+
+    const clonedProcesses = base.processes.map((proc, idx) => ({
+      ...proc,
+      id: `${newId}-pr-${idx + 1}`,
+      fromPointId: `${newId}-pt-${base.points.findIndex((p) => p.id === proc.fromPointId) + 1}`,
+      toPointId: `${newId}-pt-${base.points.findIndex((p) => p.id === proc.toPointId) + 1}`,
+      conditionId: newId,
+    }));
+
+    const newCond: OperatingCondition = {
+      id: newId,
+      name,
+      description: `Clonado de "${base.name}".`,
+      color: assignedColor,
+      isActive: false,
+      isOverlayVisible: true,
+      points: clonedPoints,
+      processes: clonedProcesses,
+      airflowMultiplier: base.airflowMultiplier ?? 1.0,
+    };
+
+    setConditions((prev) => [...prev, newCond]);
+  }, [conditions]);
+
+  const handleDeleteCondition = useCallback((condId: string) => {
+    if (conditions.length <= 1) return;
+    setConditions((prev) => prev.filter((c) => c.id !== condId));
+    if (activeConditionId === condId) {
+      const remaining = conditions.filter((c) => c.id !== condId);
+      if (remaining.length > 0) {
+        handleSelectCondition(remaining[0].id);
+      }
+    }
+  }, [conditions, activeConditionId, handleSelectCondition]);
+
+  const handleUpdateConditionMultiplier = useCallback((condId: string, multiplier: number) => {
+    setConditions((prev) =>
+      prev.map((c) => {
+        if (c.id !== condId) return c;
+        const rescaledPoints = c.points.map((pt) => ({
+          ...pt,
+          volumeFlow: Math.round((pt.volumeFlow || 3000) * multiplier),
+        }));
+        const rescaledProcs = c.processes.map((proc) => {
+          const ptFrom = rescaledPoints.find((p) => p.id === proc.fromPointId) || rescaledPoints[0];
+          const ptTo = rescaledPoints.find((p) => p.id === proc.toPointId) || rescaledPoints[1];
+          const newFlow = Math.round((proc.volumeFlow || ptFrom.volumeFlow || 3000) * multiplier);
+          const metrics = calculateProcessMetrics(ptFrom, ptTo, undefined, newFlow);
+          return {
+            ...proc,
+            ...metrics,
+          };
+        });
+        return {
+          ...c,
+          airflowMultiplier: multiplier,
+          points: rescaledPoints,
+          processes: rescaledProcs,
+        };
+      })
+    );
+    if (condId === activeConditionId) {
+      setPoints((prevPts) =>
+        prevPts.map((p) => ({ ...p, volumeFlow: Math.round((p.volumeFlow || 3000) * multiplier) }))
+      );
+      setProcesses((prevProcs) =>
+        prevProcs.map((pr) => {
+          const newFlow = Math.round((pr.volumeFlow || 3000) * multiplier);
+          return { ...pr, volumeFlow: newFlow };
+        })
+      );
+    }
+  }, [activeConditionId]);
+
+  const handleUpdateConditionColor = useCallback((condId: string, color: string) => {
+    setConditions((prev) =>
+      prev.map((c) => (c.id === condId ? { ...c, color } : c))
+    );
+  }, []);
 
   // Load preset cycle
   const handleSelectPreset = (preset: PresetCycle) => {
@@ -378,6 +570,12 @@ export default function App() {
         onOpenIdaeModal={() => setIsIdaeModalOpen(true)}
         isSidebarCollapsed={isSidebarCollapsed}
         onToggleSidebar={() => setIsSidebarCollapsed((prev) => !prev)}
+        activeConditionName={conditions.find((c) => c.id === activeConditionId)?.name}
+        onOpenConditionsModal={() => setIsConditionsModalOpen(true)}
+        onOpenCoilModelerModal={() => setIsCoilModelerModalOpen(true)}
+        onOpenAirMixingModal={() => setIsAirMixingModalOpen(true)}
+        onOpenShrModal={() => setIsShrModalOpen(true)}
+        onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
       />
 
       {/* Main Workspace: Left Sidebar + Center Chart/Tables */}
@@ -403,7 +601,7 @@ export default function App() {
                 >
                   <ChevronRight className="w-4 h-4 text-[#fbbf24] group-hover:translate-x-0.5 transition-transform" />
                   <span className="[writing-mode:vertical-rl] rotate-180 text-[11px] font-mono font-bold uppercase tracking-wider text-slate-300 group-hover:text-[#fbbf24] py-1">
-                    Puntos Psicrométricos ({points.length})
+                    Puntos ({points.length})
                   </span>
                 </button>
 
@@ -426,6 +624,28 @@ export default function App() {
                   <LayoutTemplate className="w-4 h-4 text-[#fbbf24] group-hover:scale-110 transition-transform" />
                   <span className="[writing-mode:vertical-rl] rotate-180 text-[11px] font-mono font-bold uppercase tracking-wider text-slate-300 group-hover:text-[#fbbf24] py-1">
                     Plantillas UTA ({AHU_ARCHETYPES.length - 1})
+                  </span>
+                </button>
+
+                <div className="w-6 h-px bg-white/10" />
+
+                {/* Tab 3: Escenarios Operativos (OTS) */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSidebarActiveTab('scenarios');
+                    setIsSidebarCollapsed(false);
+                  }}
+                  className={`p-1.5 w-full flex flex-col items-center gap-2 group cursor-pointer transition-colors rounded-xl ${
+                    sidebarActiveTab === 'scenarios'
+                      ? 'bg-amber-500/15 border border-amber-500/30'
+                      : 'hover:bg-white/5 border border-transparent'
+                  }`}
+                  title="Desplegar Escenarios de Operación"
+                >
+                  <LayersIcon className="w-4 h-4 text-amber-400 group-hover:scale-110 transition-transform" />
+                  <span className="[writing-mode:vertical-rl] rotate-180 text-[11px] font-mono font-bold uppercase tracking-wider text-slate-300 group-hover:text-amber-400 py-1">
+                    Escenarios ({conditions.length})
                   </span>
                 </button>
               </div>
@@ -455,6 +675,15 @@ export default function App() {
               activeTab={sidebarActiveTab}
               onTabChange={setSidebarActiveTab}
               onLoadArchetype={handleLoadArchetypeFromSidebar}
+              conditions={conditions}
+              activeConditionId={activeConditionId}
+              onSelectCondition={handleSelectCondition}
+              onToggleOverlayCondition={handleToggleOverlayCondition}
+              onOpenConditionsModal={() => setIsConditionsModalOpen(true)}
+              onUpdateProcessAirflow={handleUpdateProcessAirflow}
+              onOpenCoilModelerModal={() => setIsCoilModelerModalOpen(true)}
+              onOpenAirMixingModal={() => setIsAirMixingModalOpen(true)}
+              onOpenShrModal={() => setIsShrModalOpen(true)}
             />
           )}
         </div>
@@ -477,6 +706,7 @@ export default function App() {
               isolatedProcessInfo={isolatedProcessInfo}
               onSetIsolatedProcessInfo={setIsolatedProcessInfo}
               onDeletePoint={handleDeletePoint}
+              onToggleHidePoint={handleToggleHidePoint}
               onDeleteProcess={handleDeleteProcess}
               onDuplicatePoint={(id) => {
                 const src = points.find((p) => p.id === id);
@@ -493,6 +723,8 @@ export default function App() {
                 setSelectedPointId(id);
               }}
               isSplitView={false}
+              onUpdatePoint={handleUpdatePoint}
+              overlayConditions={overlayConditions}
             />
           )}
 
@@ -505,6 +737,7 @@ export default function App() {
                 setCurrentView('chart');
               }}
               onDeletePoint={handleDeletePoint}
+              onToggleHidePoint={handleToggleHidePoint}
               onAddPoint={handleAddPoint}
               selectedPointId={selectedPointId}
             />
@@ -516,6 +749,10 @@ export default function App() {
               points={points}
               units={units}
               onDeleteProcess={handleDeleteProcess}
+              onUpdateProcessAirflow={handleUpdateProcessAirflow}
+              onOpenCoilModelerModal={() => setIsCoilModelerModalOpen(true)}
+              onOpenAirMixingModal={() => setIsAirMixingModalOpen(true)}
+              onOpenShrModal={() => setIsShrModalOpen(true)}
             />
           )}
 
@@ -566,6 +803,16 @@ export default function App() {
                 setSidebarActiveTab('archetypes');
                 setIsSidebarCollapsed(false);
               }}
+            />
+          )}
+
+          {currentView === 'teaching' && (
+            <TeachingWorkspace
+              pressure={atmosphere.pressure}
+              units={units}
+              chartType={chartType}
+              onChangeChartType={setChartType}
+              onNavigateToView={(v) => setCurrentView(v)}
             />
           )}
         </main>
@@ -621,6 +868,18 @@ export default function App() {
                     handleLoadArchetypeFromSidebar(id);
                     setIsMobileSidebarOpen(false);
                   }}
+                  onOpenCoilModelerModal={() => {
+                    setIsCoilModelerModalOpen(true);
+                    setIsMobileSidebarOpen(false);
+                  }}
+                  onOpenAirMixingModal={() => {
+                    setIsAirMixingModalOpen(true);
+                    setIsMobileSidebarOpen(false);
+                  }}
+                  onOpenShrModal={() => {
+                    setIsShrModalOpen(true);
+                    setIsMobileSidebarOpen(false);
+                  }}
                 />
               </div>
             </div>
@@ -634,6 +893,16 @@ export default function App() {
 
       {/* Mobile Bottom Navigation Bar (md:hidden for smartphones and portrait tablets) */}
       <nav className="md:hidden fixed bottom-0 left-0 right-0 h-14 bg-[#0a0a0c]/95 border-t border-white/10 z-40 flex items-center justify-around px-2 backdrop-blur-xl touch-manipulation shadow-[0_-5px_20px_rgba(0,0,0,0.8)]">
+        <button
+          onClick={() => setCurrentView('teaching')}
+          className={`flex flex-col items-center justify-center py-1 px-3 rounded-lg transition-colors cursor-pointer touch-manipulation ${
+            currentView === 'teaching' ? 'text-[#fbbf24] font-bold' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <GraduationCap className="w-4 h-4" />
+          <span className="text-[10px] mt-0.5 font-medium">Aula</span>
+        </button>
+
         <button
           onClick={() => setCurrentView('schematic')}
           className={`flex flex-col items-center justify-center py-1 px-3 rounded-lg transition-colors cursor-pointer touch-manipulation ${
@@ -727,6 +996,69 @@ export default function App() {
         points={points}
         processes={updatedProcesses}
         onSelectPreset={handleSelectPreset}
+      />
+
+      <ConditionsModal
+        isOpen={isConditionsModalOpen}
+        onClose={() => setIsConditionsModalOpen(false)}
+        conditions={conditions}
+        activeConditionId={activeConditionId}
+        onSelectCondition={handleSelectCondition}
+        onToggleOverlayCondition={handleToggleOverlayCondition}
+        onAddCondition={handleAddCondition}
+        onDeleteCondition={handleDeleteCondition}
+        onUpdateConditionMultiplier={handleUpdateConditionMultiplier}
+        onUpdateConditionColor={handleUpdateConditionColor}
+        units={units}
+      />
+
+      <CoilModelerModal
+        isOpen={isCoilModelerModalOpen}
+        onClose={() => setIsCoilModelerModalOpen(false)}
+        points={points}
+        pressure={atmosphere.pressure}
+        units={units}
+        onApplyCoilProcess={handleApplyCoilProcess}
+      />
+
+      <AirMixingModal
+        isOpen={isAirMixingModalOpen}
+        onClose={() => setIsAirMixingModalOpen(false)}
+        points={points}
+        pressure={atmosphere.pressure}
+        units={units}
+        onApplyMixingProcess={handleApplyMixingProcess}
+      />
+
+      <ShrCoilSizingModal
+        isOpen={isShrModalOpen}
+        onClose={() => setIsShrModalOpen(false)}
+        pressure={atmosphere.pressure}
+        altitude={atmosphere.altitude}
+        units={units}
+        onApplyShrCycle={handleApplyShrCycle}
+      />
+
+      <CommandPalette
+        isOpen={isCommandPaletteOpen}
+        onClose={() => setIsCommandPaletteOpen(false)}
+        currentView={currentView}
+        onChangeView={setCurrentView}
+        chartType={chartType}
+        onChangeChartType={setChartType}
+        onOpenCoilModelerModal={() => setIsCoilModelerModalOpen(true)}
+        onOpenAirMixingModal={() => setIsAirMixingModalOpen(true)}
+        onOpenShrModal={() => setIsShrModalOpen(true)}
+        onOpenConditionsModal={() => setIsConditionsModalOpen(true)}
+        onOpenPresetsModal={() => setIsPresetsModalOpen(true)}
+        onOpenIdaeModal={() => setIsIdaeModalOpen(true)}
+        onOpenAiAssistant={() => setIsAiModalOpen(true)}
+        onOpenAtmosphereModal={() => setIsAtmosphereModalOpen(true)}
+        onOpenExportModal={() => setIsExportModalOpen(true)}
+        points={points}
+        onSelectPoint={setSelectedPointId}
+        units={units}
+        onToggleUnits={() => setUnits((prev) => (prev === 'SI' ? 'IP' : 'SI'))}
       />
     </div>
   );

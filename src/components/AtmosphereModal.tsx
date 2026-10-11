@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { pressureFromAltitude, altitudeFromPressure, P_ATM_STANDARD } from '../utils/psychrolib';
-import { X, Mountain } from 'lucide-react';
+import { OTS_ELEVATION_PRESETS } from '../utils/processEngine';
+import { X, Mountain, Sparkles } from 'lucide-react';
 
 interface AtmosphereModalProps {
   isOpen: boolean;
@@ -29,6 +30,8 @@ export const AtmosphereModal: React.FC<AtmosphereModalProps> = ({
 }) => {
   if (!isOpen) return null;
 
+  const [presetCategory, setPresetCategory] = useState<'ots' | 'cities'>('ots');
+
   const handleAltitudeChange = (alt: number) => {
     const safeAlt = Math.max(0, Math.min(5000, alt));
     const p = pressureFromAltitude(safeAlt);
@@ -39,6 +42,10 @@ export const AtmosphereModal: React.FC<AtmosphereModalProps> = ({
     const safeP = Math.max(50, Math.min(105, p));
     const alt = altitudeFromPressure(safeP);
     onChangeAtmosphere(safeP, Math.round(alt));
+  };
+
+  const handleSelectOtsElevation = (p: number, alt: number) => {
+    onChangeAtmosphere(p, alt);
   };
 
   return (
@@ -117,29 +124,87 @@ export const AtmosphereModal: React.FC<AtmosphereModalProps> = ({
             </div>
           </div>
 
-          {/* City Presets */}
-          <div className="space-y-2">
-            <span className="text-xs font-bold text-[#cbd5e1] uppercase tracking-wider">
-              Ubicaciones de Referencia
-            </span>
-            <div className="grid grid-cols-2 gap-2">
-              {CITY_PRESETS.map((city) => (
+          {/* Presets Selector: OTS Elevations vs Cities */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
+              <span className="text-xs font-bold text-[#cbd5e1] uppercase tracking-wider">
+                Preajustes de Elevación y Presión
+              </span>
+              <div className="flex items-center gap-1 bg-slate-900 p-0.5 rounded-lg border border-slate-700">
                 <button
-                  key={city.name}
-                  onClick={() => handleAltitudeChange(city.altitude)}
-                  className={`p-2.5 rounded-[6px] text-left border transition-all text-xs ${
-                    Math.abs(altitude - city.altitude) < 30
-                      ? 'bg-[#fbbf24]/15 border-[#fbbf24] text-white shadow-[0_0_8px_rgba(251,191,36,0.2)]'
-                      : 'bg-[#0a0a0c]/60 border-[rgba(255,255,255,0.1)] text-[#cbd5e1] hover:bg-[rgba(255,255,255,0.06)]'
+                  type="button"
+                  onClick={() => setPresetCategory('ots')}
+                  className={`px-2.5 py-1 rounded text-[11px] font-bold transition-all ${
+                    presetCategory === 'ots'
+                      ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40 shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200'
                   }`}
                 >
-                  <div className="font-semibold truncate">{city.name}</div>
-                  <div className="text-[11px] text-[#cbd5e1] font-mono mt-0.5">
-                    {city.altitude} m ({city.desc})
-                  </div>
+                  OTS Elevations
                 </button>
-              ))}
+                <button
+                  type="button"
+                  onClick={() => setPresetCategory('cities')}
+                  className={`px-2.5 py-1 rounded text-[11px] font-bold transition-all ${
+                    presetCategory === 'cities'
+                      ? 'bg-[#fbbf24]/20 text-[#fbbf24] border border-[#fbbf24]/40 shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Ciudades
+                </button>
+              </div>
             </div>
+
+            {presetCategory === 'ots' ? (
+              <div className="grid grid-cols-2 gap-2">
+                {OTS_ELEVATION_PRESETS.map((p) => {
+                  const isCurrent = Math.abs(pressure - p.pressureKPa) < 0.8;
+                  return (
+                    <button
+                      key={p.name}
+                      onClick={() => handleSelectOtsElevation(p.pressureKPa, p.altitudeM)}
+                      className={`p-2.5 rounded-lg text-left border transition-all text-xs flex flex-col justify-between ${
+                        isCurrent
+                          ? 'bg-purple-500/20 border-purple-400 text-white shadow-[0_0_10px_rgba(168,85,247,0.3)]'
+                          : 'bg-[#0a0a0c]/60 border-[rgba(255,255,255,0.1)] text-[#cbd5e1] hover:bg-[rgba(255,255,255,0.06)]'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between w-full">
+                        <span className="font-bold text-white text-[11px]">{p.name}</span>
+                        {p.deratingPercent !== 0 && (
+                          <span className="text-[10px] px-1 rounded bg-rose-500/20 text-rose-300 font-mono">
+                            {p.deratingPercent}%
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[10px] text-slate-400 font-mono mt-1">
+                        {p.pressureKPa} kPa · {p.pressurePsia} psia
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-2">
+                {CITY_PRESETS.map((city) => (
+                  <button
+                    key={city.name}
+                    onClick={() => handleAltitudeChange(city.altitude)}
+                    className={`p-2.5 rounded-[6px] text-left border transition-all text-xs ${
+                      Math.abs(altitude - city.altitude) < 30
+                        ? 'bg-[#fbbf24]/15 border-[#fbbf24] text-white shadow-[0_0_8px_rgba(251,191,36,0.2)]'
+                        : 'bg-[#0a0a0c]/60 border-[rgba(255,255,255,0.1)] text-[#cbd5e1] hover:bg-[rgba(255,255,255,0.06)]'
+                    }`}
+                  >
+                    <div className="font-semibold truncate">{city.name}</div>
+                    <div className="text-[11px] text-[#cbd5e1] font-mono mt-0.5">
+                      {city.altitude} m ({city.desc})
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 

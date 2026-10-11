@@ -17,7 +17,7 @@ interface ASHRAEProtractorProps {
   spanT: number;
   spanW: number;
   pressure: number;
-  theme: 'ashrae_classic' | 'valcon_color' | 'dark_blueprint';
+  theme: 'ashrae_classic' | 'valcon_color' | 'dark_blueprint' | 'ashrae_si_no1';
   units?: 'SI' | 'IP';
   activeSHR?: number | null;
   onSelectSHR?: (shr: number | null) => void;
@@ -45,27 +45,36 @@ export const ASHRAEProtractor: React.FC<ASHRAEProtractorProps> = ({
 
   const isGreenTheme = theme === 'ashrae_classic';
   const isDarkTheme = theme === 'dark_blueprint';
+  const isSiNo1 = theme === 'ashrae_si_no1';
 
   // Theme-aware strokes and text colors
-  const primaryColor = isGreenTheme
+  const primaryColor = isSiNo1
+    ? '#000000'
+    : isGreenTheme
     ? '#15803D' // Canonical ASHRAE green
     : isDarkTheme
     ? '#38BDF8' // Sky cyan for dark mode
     : '#0284C7'; // Valcon blue
 
-  const secondaryColor = isGreenTheme
+  const secondaryColor = isSiNo1
+    ? '#333333'
+    : isGreenTheme
     ? '#166534'
     : isDarkTheme
     ? '#94A3B8'
     : '#0369A1';
 
-  const accentColor = isGreenTheme
+  const accentColor = isSiNo1
+    ? '#B45309'
+    : isGreenTheme
     ? '#B45309'
     : isDarkTheme
     ? '#FBBF24'
     : '#D97706';
 
-  const textColor = isGreenTheme
+  const textColor = isSiNo1
+    ? '#000000'
+    : isGreenTheme
     ? '#14532D'
     : isDarkTheme
     ? '#F8FAFC'
@@ -84,19 +93,28 @@ export const ASHRAEProtractor: React.FC<ASHRAEProtractorProps> = ({
   const refPt = getAshraeReferencePoint(pressure);
   const [refX, refY] = coordToPixel(refPt.tdb, refPt.w);
 
-  // Focus point for RCL projection (either selected point or canonical reference point)
-  const targetPt = selectedPoint || {
+  // Focus point for RCL projection:
+  // If selected point has a physically valid ADP (e.g. Room/Return/Comfort point), use it.
+  // If selected point has no ADP (e.g. Exterior ODA hot air where slope cannot reach saturation),
+  // fall back to canonical ASHRAE reference point so the RCL and ADP are always thermodynamically valid.
+  const selectedPtAdp = (selectedPoint && currentActiveSHR !== null && currentActiveSHR > 0 && currentActiveSHR <= 1.0)
+    ? calculateADP(selectedPoint.tdb, selectedPoint.w, currentActiveSHR, pressure)
+    : null;
+
+  const targetPt = (selectedPtAdp ? selectedPoint : null) || {
     id: 'ref',
-    name: 'Punto Ref. ASHRAE (24°C / 50%)',
+    name: selectedPoint && !selectedPtAdp
+      ? `Punto Ref. ASHRAE (${selectedPoint.name.split(' ')[0]} sin ADP)`
+      : 'Punto Ref. ASHRAE (24°C / 50% HR)',
     tdb: refPt.tdb,
     w: refPt.w,
   };
   const [targetX, targetY] = coordToPixel(targetPt.tdb, targetPt.w);
 
   // Exact thermodynamic ADP for the active SHR
-  const adpData = currentActiveSHR !== null && currentActiveSHR > 0 && currentActiveSHR <= 1.0
+  const adpData = selectedPtAdp || (currentActiveSHR !== null && currentActiveSHR > 0 && currentActiveSHR <= 1.0
     ? calculateADP(targetPt.tdb, targetPt.w, currentActiveSHR, pressure)
-    : null;
+    : null);
 
   const adpPixel = adpData ? coordToPixel(adpData.tdbAdp, adpData.wAdp) : null;
 
@@ -110,14 +128,18 @@ export const ASHRAEProtractor: React.FC<ASHRAEProtractorProps> = ({
         height={currentActiveSHR !== null ? radius + 104 : radius + 84}
         rx="8"
         fill={
-          isGreenTheme
+          isSiNo1
+            ? 'rgba(255, 255, 255, 0.98)'
+            : isGreenTheme
             ? 'rgba(254, 254, 252, 0.96)'
             : isDarkTheme
             ? 'rgba(10, 10, 12, 0.92)'
             : 'rgba(255, 255, 255, 0.96)'
         }
         stroke={
-          isGreenTheme
+          isSiNo1
+            ? '#000000'
+            : isGreenTheme
             ? '#15803D'
             : isDarkTheme
             ? 'rgba(255, 255, 255, 0.2)'
@@ -329,24 +351,13 @@ export const ASHRAEProtractor: React.FC<ASHRAEProtractorProps> = ({
             const sinA = Math.sin(angle);
             const dWdT = getSlopeFromSHR(currentActiveSHR);
 
-            // Precise thermodynamic line endpoints
-            let startPx = targetX;
-            let startPy = targetY;
-            if (adpPixel) {
-              // Line starts right at the Apparatus Dew Point on the saturation curve
-              startPx = adpPixel[0];
-              startPy = adpPixel[1];
-            } else {
-              const tLow = Math.max(-10, targetPt.tdb - 18);
-              const wLow = Math.max(0, targetPt.w - dWdT * (targetPt.tdb - tLow));
-              const [sx, sy] = coordToPixel(tLow, wLow);
-              startPx = sx;
-              startPy = sy;
-            }
+            // Precise thermodynamic line endpoints:
+            // Starts strictly at the Apparatus Dew Point on the 100% saturation curve (never enters supersaturation)
+            const [startPx, startPy] = adpPixel ? adpPixel : [targetX, targetY];
 
-            // Line extends into the room zone (warmer Tdb)
-            const tHigh = targetPt.tdb + Math.max(10, (targetPt.tdb - (adpData?.tdbAdp ?? targetPt.tdb)) * 0.7);
-            const wHigh = targetPt.w + dWdT * (tHigh - targetPt.tdb);
+            // Line extends cleanly up to the room condition state
+            const tHigh = targetPt.tdb + 1.5;
+            const wHigh = targetPt.w + dWdT * 1.5;
             const [endPx, endPy] = coordToPixel(tHigh, Math.max(0, wHigh));
 
             return (

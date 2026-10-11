@@ -3,6 +3,8 @@ import {
   calculateADP,
   getSlopeFromSHR,
   getAshraeReferencePoint,
+  getMollierProtractorAngle,
+  MOLLIER_SHR_VALUES,
 } from '../utils/ashraeScales';
 import { UnitConvert } from '../utils/psychrolib';
 
@@ -12,6 +14,8 @@ export interface MollierProtractorProps {
   radius?: number; // default 72
   plotWidth: number;
   plotHeight: number;
+  spanT?: number;
+  spanW?: number;
   pressure: number;
   isDark?: boolean;
   units?: 'SI' | 'IP';
@@ -21,37 +25,14 @@ export interface MollierProtractorProps {
   selectedPoint?: { id: string; name: string; tdb: number; w: number } | null;
 }
 
-interface MollierTick {
-  shr: number;
-  label: string;
-  x: number;
-  y: number;
-  isMajor: boolean;
-}
-
-const MOLLIER_TICKS: MollierTick[] = [
-  { shr: 1.0, label: '1.0', x: 794.0, y: 407.8, isMajor: true },
-  { shr: 0.9, label: '0.9', x: 787.8, y: 553.3, isMajor: true },
-  { shr: 0.8, label: '0.8', x: 780.1, y: 552.2, isMajor: true },
-  { shr: 0.7, label: '0.7', x: 771.0, y: 549.8, isMajor: true },
-  { shr: 0.6, label: '0.6', x: 760.4, y: 545.3, isMajor: true },
-  { shr: 0.5, label: '0.5', x: 749.0, y: 538.0, isMajor: true },
-  { shr: 0.4, label: '0.4', x: 738.3, y: 527.6, isMajor: true },
-  { shr: 0.3, label: '0.3', x: 729.7, y: 515.0, isMajor: true },
-  { shr: 0.2, label: '0.2', x: 724.3, y: 501.8, isMajor: true },
-  { shr: 0.1, label: '0.1', x: 721.7, y: 489.6, isMajor: false },
-  { shr: 0.0, label: '0.0', x: 721.2, y: 479.1, isMajor: true },
-  { shr: -0.2, label: '-0.2', x: 722.1, y: 468.8, isMajor: false },
-  { shr: -0.5, label: '-0.5', x: 724.5, y: 458.8, isMajor: true },
-  { shr: -1.0, label: '-1.0', x: 727.9, y: 450.0, isMajor: true },
-  { shr: -2.0, label: '-2.0', x: 731.9, y: 442.5, isMajor: false },
-  { shr: -4.0, label: '-4.0', x: 735.3, y: 437.5, isMajor: false },
-];
-
 export const MollierProtractor: React.FC<MollierProtractorProps> = ({
   x0 = 794.0,
   y0 = 480.7,
   radius = 72,
+  plotWidth,
+  plotHeight,
+  spanT = 60,
+  spanW = 0.030,
   pressure,
   isDark = true,
   units = 'SI',
@@ -90,26 +71,14 @@ export const MollierProtractor: React.FC<MollierProtractorProps> = ({
 
   const adpPixel = adpData ? coordToPixel(adpData.tdbAdp, adpData.wAdp) : null;
 
-  // Find coordinates for active ray
+  // Find coordinates for active ray using exact thermodynamic angle
   let activeRayPoint: { x: number; y: number } | null = null;
-  if (currentActiveSHR !== null) {
-    const matched = MOLLIER_TICKS.find((t) => Math.abs(t.shr - currentActiveSHR) < 0.01);
-    if (matched) {
-      activeRayPoint = { x: matched.x, y: matched.y };
-    } else {
-      // Interpolate between closest ticks
-      const sorted = [...MOLLIER_TICKS].sort((a, b) => a.shr - b.shr);
-      for (let i = 0; i < sorted.length - 1; i++) {
-        if (currentActiveSHR >= sorted[i].shr && currentActiveSHR <= sorted[i + 1].shr) {
-          const ratio = (currentActiveSHR - sorted[i].shr) / (sorted[i + 1].shr - sorted[i].shr);
-          activeRayPoint = {
-            x: sorted[i].x + ratio * (sorted[i + 1].x - sorted[i].x),
-            y: sorted[i].y + ratio * (sorted[i + 1].y - sorted[i].y),
-          };
-          break;
-        }
-      }
-    }
+  if (currentActiveSHR !== null && currentActiveSHR >= 0 && currentActiveSHR <= 1.0) {
+    const gamma = getMollierProtractorAngle(currentActiveSHR, plotWidth, plotHeight, spanT, spanW);
+    activeRayPoint = {
+      x: x0 - radius * Math.cos(gamma),
+      y: y0 + radius * Math.sin(gamma),
+    };
   }
 
   return (
@@ -157,23 +126,33 @@ export const MollierProtractor: React.FC<MollierProtractorProps> = ({
       />
 
       {/* Interactive Ray Click Targets and Ticks */}
-      {MOLLIER_TICKS.map((t) => {
+      {MOLLIER_SHR_VALUES.filter((t) => t.shr >= 0 && t.shr <= 1.0).map((t) => {
         const isHovered = hoveredSHR === t.shr;
         const isSelected = activeSHR === t.shr;
         const isHigh = isHovered || isSelected;
 
-        // Angle from center (x0, y0) to (t.x, t.y)
-        const dx = t.x - x0;
-        const dy = t.y - y0;
-        const dist = Math.hypot(dx, dy) || 1;
-        const normX = dx / dist;
-        const normY = dy / dist;
+        const gamma = getMollierProtractorAngle(t.shr, plotWidth, plotHeight, spanT, spanW);
+        const cosG = Math.cos(gamma);
+        const sinG = Math.sin(gamma);
 
-        const xInner = x0 + (radius - (t.isMajor ? 8 : 4)) * normX;
-        const yInner = y0 + (radius - (t.isMajor ? 8 : 4)) * normY;
+        const xOuter = x0 - radius * cosG;
+        const yOuter = y0 + radius * sinG;
+        const tickLen = t.isMajor ? 8 : 4;
+        const xInner = x0 - (radius - tickLen) * cosG;
+        const yInner = y0 + (radius - tickLen) * sinG;
 
-        const xLabel = x0 + (radius + 12) * normX;
-        const yLabel = y0 + (radius + 12) * normY;
+        const isNearBottom = gamma > 1.2;
+        const xLabel = x0 - (radius + (isNearBottom ? 14 : 10)) * cosG;
+        const yLabel = y0 + (radius + (isNearBottom ? 14 : 10)) * sinG;
+
+        const innerRadius = radius * 0.72;
+        const xInnerTick = x0 - (innerRadius - 4) * cosG;
+        const yInnerTick = y0 + (innerRadius - 4) * sinG;
+        const xInnerOuter = x0 - innerRadius * cosG;
+        const yInnerOuter = y0 + innerRadius * sinG;
+        const showInnerLabel = t.deltaHDeltaW !== undefined && [25.0, 12.5, 5.0, 2.50].includes(t.deltaHDeltaW);
+        const xInnerLabel = x0 - (innerRadius - 10) * cosG;
+        const yInnerLabel = y0 + (innerRadius - 10) * sinG;
 
         return (
           <g
@@ -191,8 +170,8 @@ export const MollierProtractor: React.FC<MollierProtractorProps> = ({
             <line
               x1={x0}
               y1={y0}
-              x2={x0 + (radius + 16) * normX}
-              y2={y0 + (radius + 16) * normY}
+              x2={x0 - (radius + 16) * cosG}
+              y2={y0 + (radius + 16) * sinG}
               stroke="transparent"
               strokeWidth="9"
             />
@@ -201,19 +180,31 @@ export const MollierProtractor: React.FC<MollierProtractorProps> = ({
             <line
               x1={xInner}
               y1={yInner}
-              x2={t.x}
-              y2={t.y}
+              x2={xOuter}
+              y2={yOuter}
               stroke={isHigh ? accentColor : primaryColor}
               strokeWidth={t.isMajor ? 1.5 : 0.8}
             />
+
+            {/* Inner Delta_h / Delta_w Tick */}
+            {t.deltaHDeltaW !== undefined && (
+              <line
+                x1={xInnerTick}
+                y1={yInnerTick}
+                x2={xInnerOuter}
+                y2={yInnerOuter}
+                stroke={isHigh ? accentColor : secondaryColor}
+                strokeWidth={0.8}
+              />
+            )}
 
             {/* Ray beam when active or hovered */}
             {isHigh && (
               <line
                 x1={x0}
                 y1={y0}
-                x2={t.x}
-                y2={t.y}
+                x2={xOuter}
+                y2={yOuter}
                 stroke={accentColor}
                 strokeWidth="1.8"
                 strokeDasharray="4,2"
@@ -221,17 +212,34 @@ export const MollierProtractor: React.FC<MollierProtractorProps> = ({
             )}
 
             {/* Tick Label */}
-            <text
-              x={xLabel}
-              y={yLabel + 2.5}
-              textAnchor="middle"
-              fill={isHigh ? accentColor : textColor}
-              fontSize="7"
-              fontWeight={isHigh ? 'bold' : 'normal'}
-              fontFamily="Fira Code, monospace"
-            >
-              {t.label}
-            </text>
+            {t.isMajor && (
+              <text
+                x={xLabel}
+                y={isNearBottom ? yLabel + 7 : yLabel + 2.5}
+                textAnchor={isNearBottom ? 'middle' : 'end'}
+                fill={isHigh ? accentColor : textColor}
+                fontSize="7"
+                fontWeight={isHigh ? 'bold' : 'normal'}
+                fontFamily="Fira Code, monospace"
+              >
+                {t.label}
+              </text>
+            )}
+
+            {/* Inner Delta_h / Delta_w Label */}
+            {showInnerLabel && (
+              <text
+                x={xInnerLabel}
+                y={yInnerLabel + 2}
+                textAnchor="middle"
+                fill={secondaryColor}
+                fontSize="5.5"
+                fontFamily="Fira Code, monospace"
+                opacity="0.85"
+              >
+                {t.deltaHDeltaW}
+              </text>
+            )}
           </g>
         );
       })}

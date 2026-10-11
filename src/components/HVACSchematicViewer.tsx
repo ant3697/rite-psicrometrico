@@ -1162,11 +1162,34 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
   }, [dynamicSvgViewBoxWidth, dynamicSvgViewBoxHeight]);
 
   // Viewport Transform State (Zoom, Pan, Center)
-  const [transform, setTransform] = useState<ViewTransform>({
-    zoom: 1.0,
-    panX: 0,
-    panY: 0,
+  // By user requirement: default zoom is 100% (1.0), and then remembers locally the last used zoom value.
+  const [transform, setTransform] = useState<ViewTransform>(() => {
+    try {
+      const saved = localStorage.getItem('hvac_schematic_zoom');
+      if (saved) {
+        const parsed = parseFloat(saved);
+        if (!isNaN(parsed) && parsed >= 0.35 && parsed <= 3.5) {
+          return { zoom: parsed, panX: 0, panY: 0 };
+        }
+      }
+    } catch {
+      // localStorage unavailable in restricted environments
+    }
+    return {
+      zoom: 1.0,
+      panX: 0,
+      panY: 0,
+    };
   });
+
+  // Remember zoom value locally across sessions and view switches
+  useEffect(() => {
+    try {
+      localStorage.setItem('hvac_schematic_zoom', String(transform.zoom));
+    } catch {
+      // ignore
+    }
+  }, [transform.zoom]);
   const [isDraggingCanvas, setIsDraggingCanvas] = useState<boolean>(false);
   const dragStartRef = useRef<{ x: number; y: number; panX: number; panY: number }>({
     x: 0,
@@ -1822,15 +1845,8 @@ export const HVACSchematicViewer: React.FC<HVACSchematicViewerProps> = ({
     }
   }, [points, autoSyncCycle]);
 
-  // Auto-fit AHU content to window viewport when view mode or properties detail mode changes
-  useEffect(() => {
-    if (schematicMode === 'ahu_section') {
-      const timer = setTimeout(() => {
-        handleZoomAll();
-      }, 60);
-      return () => clearTimeout(timer);
-    }
-  }, [cutViewMode, propertiesDetailMode, schematicMode, handleZoomAll]);
+  // Notice: Auto-zoom override removed as requested by user ("no me gusta que cada vez que se entra en la vista esquema el zoom se dispara al valores muy altos. Por defecto será del 100% inicialmente y despues recordará localmente el ultimo valor del zoom")
+  // User zoom is preserved according to localStorage, or 100% by default. Manual "Ajustar Todo" remains available via button.
 
   // Click handler to select module and point simultaneously
   const handleSelectModuleAndPoint = (modId: string, ptId?: string) => {

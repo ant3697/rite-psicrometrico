@@ -25,7 +25,11 @@ import {
   Wind,
   Layers,
   X,
+  Lock,
+  Unlock,
+  Pin,
 } from 'lucide-react';
+import { PsychroParamKey } from '../types/psychrometrics';
 
 export interface ContextMenuTarget {
   type: 'point' | 'process' | 'canvas';
@@ -49,7 +53,7 @@ interface ChartContextMenuProps {
   onSelectPoint: (id: string | null) => void;
   onCenterPoint: (tdb: number, w: number) => void;
   onCenterProcess: (p1: StatePoint, p2: StatePoint) => void;
-  onZoomAll: () => void;
+  onZoomAll?: () => void;
   onCenterCycle: () => void;
   onResetBounds: () => void;
   onAddPointAtCoordinates: (tdb: number, w: number) => void;
@@ -66,6 +70,10 @@ interface ChartContextMenuProps {
   onToggleEnthalpyDeviations: () => void;
   onLocateModuleInAhu?: (moduleIdOrPointId: string) => void;
   isSplitView?: boolean;
+  isPanZoomLocked?: boolean;
+  onTogglePanZoomLock?: () => void;
+  onToggleFixParam?: (pointId: string, param: PsychroParamKey) => void;
+  onClearFixedParams?: (pointId: string) => void;
 }
 
 export const ChartContextMenu: React.FC<ChartContextMenuProps> = ({
@@ -94,6 +102,10 @@ export const ChartContextMenu: React.FC<ChartContextMenuProps> = ({
   onToggleEnthalpyDeviations,
   onLocateModuleInAhu,
   isSplitView,
+  isPanZoomLocked = false,
+  onTogglePanZoomLock,
+  onToggleFixParam,
+  onClearFixedParams,
 }) => {
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -243,6 +255,139 @@ export const ChartContextMenu: React.FC<ChartContextMenuProps> = ({
             <Sliders className="w-3.5 h-3.5 text-amber-400" />
             <span>Seleccionar y Editar Coordenadas</span>
           </button>
+
+          {/* Fijar Parámetros Psicrométricos Constantes */}
+          {onToggleFixParam && (
+            <div className="pt-1 border-t border-slate-800 space-y-0.5">
+              <div className="text-[10px] text-slate-400 font-semibold px-2.5 py-0.5 flex items-center justify-between">
+                <span>Fijar parámetro psicrométrico:</span>
+                {pt.fixedParams && pt.fixedParams.length > 0 && (
+                  <span className="text-[9px] text-amber-400 font-mono font-bold">
+                    {pt.fixedParams.length} fijado{pt.fixedParams.length > 1 ? 's' : ''}
+                  </span>
+                )}
+              </div>
+              
+              {/* Humedad específica w */}
+              <button
+                onClick={() => {
+                  onToggleFixParam(pt.id, 'w');
+                  onClose();
+                }}
+                className={`w-full text-left px-2.5 py-1 rounded-md text-[11px] flex items-center justify-between transition-colors cursor-pointer ${
+                  pt.fixedParams?.includes('w')
+                    ? 'text-sky-300 bg-sky-950/50 font-bold border border-sky-500/30'
+                    : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <Pin className={`w-3.5 h-3.5 ${pt.fixedParams?.includes('w') ? 'text-sky-400 fill-sky-400' : 'text-sky-400'}`} />
+                  <span>Humedad específica (w)</span>
+                </div>
+                <span className="text-[10px] font-mono text-slate-400">
+                  {pt.fixedParams?.includes('w') ? 'FIJADO' : `${(pt.w * 1000).toFixed(1)} g/kg`}
+                </span>
+              </button>
+
+              {/* Tbs Bulbo Seco */}
+              <button
+                onClick={() => {
+                  onToggleFixParam(pt.id, 'tdb');
+                  onClose();
+                }}
+                className={`w-full text-left px-2.5 py-1 rounded-md text-[11px] flex items-center justify-between transition-colors cursor-pointer ${
+                  pt.fixedParams?.includes('tdb')
+                    ? 'text-amber-300 bg-amber-950/50 font-bold border border-amber-500/30'
+                    : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <Pin className={`w-3.5 h-3.5 ${pt.fixedParams?.includes('tdb') ? 'text-amber-400 fill-amber-400' : 'text-amber-400'}`} />
+                  <span>T. Bulbo Seco (Tbs)</span>
+                </div>
+                <span className="text-[10px] font-mono text-slate-400">
+                  {pt.fixedParams?.includes('tdb') ? 'FIJADO' : `${pt.tdb.toFixed(1)} °C`}
+                </span>
+              </button>
+
+              {/* HR Humedad Relativa */}
+              <button
+                onClick={() => {
+                  onToggleFixParam(pt.id, 'rh');
+                  onClose();
+                }}
+                className={`w-full text-left px-2.5 py-1 rounded-md text-[11px] flex items-center justify-between transition-colors cursor-pointer ${
+                  pt.fixedParams?.includes('rh')
+                    ? 'text-rose-300 bg-rose-950/50 font-bold border border-rose-500/30'
+                    : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <Pin className={`w-3.5 h-3.5 ${pt.fixedParams?.includes('rh') ? 'text-rose-400 fill-rose-400' : 'text-rose-400'}`} />
+                  <span>Humedad Relativa (HR)</span>
+                </div>
+                <span className="text-[10px] font-mono text-slate-400">
+                  {pt.fixedParams?.includes('rh') ? 'FIJADO' : `${pt.rh.toFixed(1)} %`}
+                </span>
+              </button>
+
+              {/* Entalpía h */}
+              <button
+                onClick={() => {
+                  onToggleFixParam(pt.id, 'h');
+                  onClose();
+                }}
+                className={`w-full text-left px-2.5 py-1 rounded-md text-[11px] flex items-center justify-between transition-colors cursor-pointer ${
+                  pt.fixedParams?.includes('h')
+                    ? 'text-emerald-300 bg-emerald-950/50 font-bold border border-emerald-500/30'
+                    : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <Pin className={`w-3.5 h-3.5 ${pt.fixedParams?.includes('h') ? 'text-emerald-400 fill-emerald-400' : 'text-emerald-400'}`} />
+                  <span>Entalpía específica (h)</span>
+                </div>
+                <span className="text-[10px] font-mono text-slate-400">
+                  {pt.fixedParams?.includes('h') ? 'FIJADO' : `${pt.h.toFixed(1)} kJ/kg`}
+                </span>
+              </button>
+
+              {/* Tbh Bulbo Húmedo */}
+              <button
+                onClick={() => {
+                  onToggleFixParam(pt.id, 'twb');
+                  onClose();
+                }}
+                className={`w-full text-left px-2.5 py-1 rounded-md text-[11px] flex items-center justify-between transition-colors cursor-pointer ${
+                  pt.fixedParams?.includes('twb')
+                    ? 'text-purple-300 bg-purple-950/50 font-bold border border-purple-500/30'
+                    : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <Pin className={`w-3.5 h-3.5 ${pt.fixedParams?.includes('twb') ? 'text-purple-400 fill-purple-400' : 'text-purple-400'}`} />
+                  <span>T. Bulbo Húmedo (Tbh)</span>
+                </div>
+                <span className="text-[10px] font-mono text-slate-400">
+                  {pt.fixedParams?.includes('twb') ? 'FIJADO' : `${pt.twb.toFixed(1)} °C`}
+                </span>
+              </button>
+            </div>
+          )}
+
+          {/* Clear fixed parameters if any */}
+          {onClearFixedParams && pt.fixedParams && pt.fixedParams.length > 0 && (
+            <button
+              onClick={() => {
+                onClearFixedParams(pt.id);
+                onClose();
+              }}
+              className="w-full text-left px-2.5 py-1 rounded-md text-[11px] text-amber-300 hover:bg-amber-950/40 flex items-center gap-2 transition-colors cursor-pointer font-semibold"
+            >
+              <Pin className="w-3.5 h-3.5 text-amber-400" />
+              <span>Desfijar todos los parámetros</span>
+            </button>
+          )}
 
           {/* Locate in AHU / IDAE cut if in split view */}
           {onLocateModuleInAhu && (
@@ -497,24 +642,13 @@ export const ChartContextMenu: React.FC<ChartContextMenuProps> = ({
 
         <button
           onClick={() => {
-            onZoomAll();
-            onClose();
-          }}
-          className="w-full text-left px-2.5 py-1 rounded-md text-[11px] text-slate-300 hover:bg-slate-800 hover:text-white flex items-center gap-2 transition-colors cursor-pointer"
-        >
-          <Maximize2 className="w-3.5 h-3.5 text-amber-400" />
-          <span>Ajustar Carta al Ciclo (Zoom Fit)</span>
-        </button>
-
-        <button
-          onClick={() => {
             onCenterCycle();
             onClose();
           }}
           className="w-full text-left px-2.5 py-1 rounded-md text-[11px] text-slate-300 hover:bg-slate-800 hover:text-white flex items-center gap-2 transition-colors cursor-pointer"
         >
           <Crosshair className="w-3.5 h-3.5 text-cyan-400" />
-          <span>Centrar Ciclo</span>
+          <span>Centrar Diagrama en Pantalla</span>
         </button>
 
         <button
@@ -525,8 +659,25 @@ export const ChartContextMenu: React.FC<ChartContextMenuProps> = ({
           className="w-full text-left px-2.5 py-1 rounded-md text-[11px] text-slate-300 hover:bg-slate-800 hover:text-white flex items-center gap-2 transition-colors cursor-pointer"
         >
           <RotateCcw className="w-3.5 h-3.5 text-slate-400" />
-          <span>Restablecer Diagrama Estándar 1:1 (-10 a 55°C)</span>
+          <span>Restablecer Diagrama 100% Centrado (-10 a 55°C)</span>
         </button>
+
+        {onTogglePanZoomLock && (
+          <button
+            onClick={() => {
+              onTogglePanZoomLock();
+              onClose();
+            }}
+            className="w-full text-left px-2.5 py-1 rounded-md text-[11px] text-slate-300 hover:bg-slate-800 hover:text-white flex items-center gap-2 transition-colors cursor-pointer"
+          >
+            {isPanZoomLocked ? (
+              <Unlock className="w-3.5 h-3.5 text-amber-400" />
+            ) : (
+              <Lock className="w-3.5 h-3.5 text-slate-400" />
+            )}
+            <span>{isPanZoomLocked ? 'Desbloquear Zoom y Paneo' : 'Bloquear Zoom y Paneo (Fijar Vista)'}</span>
+          </button>
+        )}
 
         <div className="h-[1px] bg-slate-800 my-1" />
 
@@ -547,9 +698,10 @@ export const ChartContextMenu: React.FC<ChartContextMenuProps> = ({
             onClose();
           }}
           className="w-full text-left px-2.5 py-1 rounded-md text-[11px] text-slate-300 hover:bg-slate-800 hover:text-white flex items-center gap-2 transition-colors cursor-pointer"
+          title="Curvas ASHRAE de Desviación Entálpica Δh: corrigen la desviación entre entalpía real y de saturación a Twb"
         >
           <Activity className="w-3.5 h-3.5 text-amber-400" />
-          <span>{showEnthalpyDeviations ? 'Ocultar' : 'Mostrar'} Curvas Desviación Δh</span>
+          <span>{showEnthalpyDeviations ? 'Ocultar' : 'Mostrar'} Curvas Desv. Δh (Entalpía)</span>
         </button>
 
         {isolatedProcessInfo && (

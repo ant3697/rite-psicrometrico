@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { StatePoint, UnitSystem } from '../types/psychrometrics';
-import { calculateFangerPMV, UnitConvert } from '../utils/psychrolib';
+import { calculateFangerPMV, UnitConvert, isPointInASHRAE55Comfort } from '../utils/psychrolib';
 import { FangerPpdPmvChart, getFangerSensation } from './FangerPpdPmvChart';
 import { VentilationIAQView } from './VentilationIAQView';
 import { ProcessConnection } from '../types/psychrometrics';
@@ -309,11 +309,8 @@ export const ComfortView: React.FC<ComfortViewProps> = ({
               const sensation = getFangerSensation(pmv);
               const isSelected = pt.id === selectedPointId;
 
-              // ASHRAE 55 zone evaluation (approximate boundaries)
-              const ashraeOk =
-                season === 'summer'
-                  ? pt.tdb >= 22.5 && pt.tdb <= 27.5 && pt.rh >= 25 && pt.rh <= 80 && pt.w <= 0.012
-                  : pt.tdb >= 19.5 && pt.tdb <= 24.5 && pt.rh >= 20 && pt.rh <= 80 && pt.w <= 0.012;
+              // Official ASHRAE 55-2020 Graphic Comfort Zone evaluation
+              const ashraeOk = isPointInASHRAE55Comfort(pt.tdb, pt.w, season);
 
               // European categories styling
               const catBadge =

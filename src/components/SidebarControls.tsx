@@ -8,10 +8,14 @@ import {
   PsychroInputs,
   IsolatedProcessInfo,
   AHUModuleType,
+  PsychroParamKey,
+  OperatingCondition,
 } from '../types/psychrometrics';
 import {
   UnitConvert,
   solveStatePoint,
+  solveConstrainedStatePoint,
+  PARAM_LABELS_ES,
 } from '../utils/psychrolib';
 import {
   Plus,
@@ -30,6 +34,12 @@ import {
   LayoutTemplate,
   Search,
   Check,
+  Pin,
+  PinOff,
+  Snowflake,
+  Eye,
+  EyeOff,
+  Activity,
 } from 'lucide-react';
 import { AHU_ARCHETYPES, AhuArchetype, getIdaeModuleTitle } from './HVACSchematicViewer';
 
@@ -50,9 +60,18 @@ interface SidebarControlsProps {
   isolatedProcessInfo?: IsolatedProcessInfo | null;
   onSetIsolatedProcessInfo?: (info: IsolatedProcessInfo | null) => void;
   onToggleCollapse?: () => void;
-  activeTab?: 'points' | 'processes' | 'layers' | 'archetypes';
-  onTabChange?: (tab: 'points' | 'processes' | 'layers' | 'archetypes') => void;
+  activeTab?: 'points' | 'processes' | 'layers' | 'archetypes' | 'scenarios';
+  onTabChange?: (tab: 'points' | 'processes' | 'layers' | 'archetypes' | 'scenarios') => void;
   onLoadArchetype?: (archetypeId: string) => void;
+  conditions?: OperatingCondition[];
+  activeConditionId?: string;
+  onSelectCondition?: (id: string) => void;
+  onToggleOverlayCondition?: (id: string) => void;
+  onOpenConditionsModal?: () => void;
+  onUpdateProcessAirflow?: (id: string, flowM3h: number) => void;
+  onOpenCoilModelerModal?: () => void;
+  onOpenAirMixingModal?: () => void;
+  onOpenShrModal?: () => void;
 }
 
 export const SidebarControls: React.FC<SidebarControlsProps> = ({
@@ -75,10 +94,19 @@ export const SidebarControls: React.FC<SidebarControlsProps> = ({
   activeTab: activeTabProp,
   onTabChange,
   onLoadArchetype,
+  conditions = [],
+  activeConditionId,
+  onSelectCondition,
+  onToggleOverlayCondition,
+  onOpenConditionsModal,
+  onUpdateProcessAirflow,
+  onOpenCoilModelerModal,
+  onOpenAirMixingModal,
+  onOpenShrModal,
 }) => {
-  const [internalActiveTab, setInternalActiveTab] = useState<'points' | 'processes' | 'layers' | 'archetypes'>('points');
+  const [internalActiveTab, setInternalActiveTab] = useState<'points' | 'processes' | 'layers' | 'archetypes' | 'scenarios'>('points');
   const currentTab = activeTabProp ?? internalActiveTab;
-  const handleTabChange = (tab: 'points' | 'processes' | 'layers' | 'archetypes') => {
+  const handleTabChange = (tab: 'points' | 'processes' | 'layers' | 'archetypes' | 'scenarios') => {
     setInternalActiveTab(tab);
     onTabChange?.(tab);
   };
@@ -107,8 +135,54 @@ export const SidebarControls: React.FC<SidebarControlsProps> = ({
   // Input calculation mode for selected point
   const [inputMode, setInputMode] = useState<PsychroInputs['mode']>('tdb_rh');
 
+  const handleToggleFixParam = (param: PsychroParamKey) => {
+    if (!selectedPoint) return;
+    const currentFixed = selectedPoint.fixedParams || [];
+    const isAlreadyFixed = currentFixed.includes(param);
+    let nextFixed: PsychroParamKey[];
+    const nextValues = { ...(selectedPoint.fixedValues || {}) };
+
+    if (isAlreadyFixed) {
+      nextFixed = currentFixed.filter((k) => k !== param);
+      delete nextValues[param];
+    } else {
+      if (currentFixed.length >= 2) {
+        delete nextValues[currentFixed[0]];
+        nextFixed = [currentFixed[1], param];
+      } else {
+        nextFixed = [...currentFixed, param];
+      }
+      nextValues[param] = param === 'w' ? selectedPoint.w : (selectedPoint as any)[param];
+    }
+
+    const updated: StatePoint = {
+      ...selectedPoint,
+      fixedParams: nextFixed,
+      fixedValues: nextValues,
+      isLocked: nextFixed.length >= 2,
+    };
+    onUpdatePoint(updated);
+  };
+
+  const handleClearFixedParams = () => {
+    if (!selectedPoint) return;
+    onUpdatePoint({
+      ...selectedPoint,
+      fixedParams: [],
+      fixedValues: {},
+      isLocked: false,
+    });
+  };
+
   const handleUpdateParameter = (key: 'tdb' | 'rh' | 'twb' | 'tdp' | 'w' | 'h', val: number) => {
     if (!selectedPoint) return;
+
+    // If point has fixed parameters, solve respecting constraints
+    if (selectedPoint.fixedParams && selectedPoint.fixedParams.length > 0) {
+      const updated = solveConstrainedStatePoint(selectedPoint, key, val, pressure);
+      onUpdatePoint(updated);
+      return;
+    }
 
     let inputs: PsychroInputs;
 
@@ -181,6 +255,16 @@ export const SidebarControls: React.FC<SidebarControlsProps> = ({
           >
             <LayoutTemplate className="w-3.5 h-3.5 text-[#fbbf24] shrink-0" />
             <span>Plantillas</span>
+          </button>
+          <button
+            onClick={() => handleTabChange('scenarios')}
+            className={`tab-item flex-1 justify-center text-[12px] !px-1.5 flex items-center gap-1 ${
+              currentTab === 'scenarios' ? 'active' : ''
+            }`}
+            title="Escenarios y condiciones operativas (Día de diseño, carga parcial, invierno)"
+          >
+            <Layers className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+            <span>Escenarios</span>
           </button>
         </div>
         {onToggleCollapse && (
@@ -496,6 +580,154 @@ export const SidebarControls: React.FC<SidebarControlsProps> = ({
                 </div>
               </div>
 
+              {/* Pin / Fix Psychrometric Values Section */}
+              <div className="space-y-2 bg-[#0a0a0c]/80 p-2.5 rounded-[8px] border border-[rgba(255,255,255,0.1)]">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] uppercase font-semibold tracking-wider text-slate-300 flex items-center gap-1.5">
+                    <Pin className="w-3 h-3 text-amber-400" />
+                    <span>Fijar Valores Psicrométricos</span>
+                  </span>
+                  {selectedPoint.fixedParams && selectedPoint.fixedParams.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleClearFixedParams}
+                      className="text-[9.5px] text-amber-300 hover:text-white underline font-semibold cursor-pointer"
+                    >
+                      Desfijar todos
+                    </button>
+                  )}
+                </div>
+
+                {selectedPoint.fixedParams && selectedPoint.fixedParams.length > 0 ? (
+                  <div className="bg-amber-500/15 border border-amber-400/40 rounded px-2 py-1 text-[10px] text-amber-200 font-mono flex items-center justify-between">
+                    <span>
+                      <strong>{selectedPoint.fixedParams.length} fijado{selectedPoint.fixedParams.length > 1 ? 's' : ''}:</strong>{' '}
+                      {selectedPoint.fixedParams.map((k) => PARAM_LABELS_ES[k]?.short).join(' y ')} (constante)
+                    </span>
+                  </div>
+                ) : (
+                  <p className="text-[10px] text-slate-400">
+                    Fija 1 o 2 variables (ej. <strong className="text-sky-300">w</strong> para procesos sensibles) para mantenerlas constantes al modificar otros parámetros.
+                  </p>
+                )}
+
+                <div className="grid grid-cols-2 gap-1.5 font-mono text-[11px]">
+                  {/* Humedad específica w */}
+                  <button
+                    type="button"
+                    onClick={() => handleToggleFixParam('w')}
+                    className={`px-2 py-1 rounded border text-left flex items-center justify-between transition-all cursor-pointer ${
+                      selectedPoint.fixedParams?.includes('w')
+                        ? 'bg-sky-500/20 border-sky-400 text-sky-200 shadow-sm ring-1 ring-sky-400/50'
+                        : 'bg-white/5 border-white/10 text-slate-300 hover:border-sky-400/40 hover:text-white'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1">
+                      <Pin className={`w-2.5 h-2.5 ${selectedPoint.fixedParams?.includes('w') ? 'text-sky-400 fill-sky-400' : 'text-slate-500'}`} />
+                      <span className="font-bold">w:</span>
+                    </div>
+                    <span className="text-[10px]">
+                      {selectedPoint.fixedParams?.includes('w') ? 'FIJADO' : `${(selectedPoint.w * 1000).toFixed(1)} g/kg`}
+                    </span>
+                  </button>
+
+                  {/* Tbs Bulbo seco */}
+                  <button
+                    type="button"
+                    onClick={() => handleToggleFixParam('tdb')}
+                    className={`px-2 py-1 rounded border text-left flex items-center justify-between transition-all cursor-pointer ${
+                      selectedPoint.fixedParams?.includes('tdb')
+                        ? 'bg-amber-500/20 border-amber-400 text-amber-200 shadow-sm ring-1 ring-amber-400/50'
+                        : 'bg-white/5 border-white/10 text-slate-300 hover:border-amber-400/40 hover:text-white'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1">
+                      <Pin className={`w-2.5 h-2.5 ${selectedPoint.fixedParams?.includes('tdb') ? 'text-amber-400 fill-amber-400' : 'text-slate-500'}`} />
+                      <span className="font-bold">Tbs:</span>
+                    </div>
+                    <span className="text-[10px]">
+                      {selectedPoint.fixedParams?.includes('tdb') ? 'FIJADO' : `${selectedPoint.tdb.toFixed(1)} °C`}
+                    </span>
+                  </button>
+
+                  {/* HR Humedad Relativa */}
+                  <button
+                    type="button"
+                    onClick={() => handleToggleFixParam('rh')}
+                    className={`px-2 py-1 rounded border text-left flex items-center justify-between transition-all cursor-pointer ${
+                      selectedPoint.fixedParams?.includes('rh')
+                        ? 'bg-rose-500/20 border-rose-400 text-rose-200 shadow-sm ring-1 ring-rose-400/50'
+                        : 'bg-white/5 border-white/10 text-slate-300 hover:border-rose-400/40 hover:text-white'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1">
+                      <Pin className={`w-2.5 h-2.5 ${selectedPoint.fixedParams?.includes('rh') ? 'text-rose-400 fill-rose-400' : 'text-slate-500'}`} />
+                      <span className="font-bold">HR:</span>
+                    </div>
+                    <span className="text-[10px]">
+                      {selectedPoint.fixedParams?.includes('rh') ? 'FIJADO' : `${selectedPoint.rh.toFixed(1)} %`}
+                    </span>
+                  </button>
+
+                  {/* Entalpía h */}
+                  <button
+                    type="button"
+                    onClick={() => handleToggleFixParam('h')}
+                    className={`px-2 py-1 rounded border text-left flex items-center justify-between transition-all cursor-pointer ${
+                      selectedPoint.fixedParams?.includes('h')
+                        ? 'bg-emerald-500/20 border-emerald-400 text-emerald-200 shadow-sm ring-1 ring-emerald-400/50'
+                        : 'bg-white/5 border-white/10 text-slate-300 hover:border-emerald-400/40 hover:text-white'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1">
+                      <Pin className={`w-2.5 h-2.5 ${selectedPoint.fixedParams?.includes('h') ? 'text-emerald-400 fill-emerald-400' : 'text-slate-500'}`} />
+                      <span className="font-bold">h:</span>
+                    </div>
+                    <span className="text-[10px]">
+                      {selectedPoint.fixedParams?.includes('h') ? 'FIJADO' : `${selectedPoint.h.toFixed(1)} kJ/kg`}
+                    </span>
+                  </button>
+
+                  {/* Tbh Bulbo Húmedo */}
+                  <button
+                    type="button"
+                    onClick={() => handleToggleFixParam('twb')}
+                    className={`px-2 py-1 rounded border text-left flex items-center justify-between transition-all cursor-pointer ${
+                      selectedPoint.fixedParams?.includes('twb')
+                        ? 'bg-purple-500/20 border-purple-400 text-purple-200 shadow-sm ring-1 ring-purple-400/50'
+                        : 'bg-white/5 border-white/10 text-slate-300 hover:border-purple-400/40 hover:text-white'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1">
+                      <Pin className={`w-2.5 h-2.5 ${selectedPoint.fixedParams?.includes('twb') ? 'text-purple-400 fill-purple-400' : 'text-slate-500'}`} />
+                      <span className="font-bold">Tbh:</span>
+                    </div>
+                    <span className="text-[10px]">
+                      {selectedPoint.fixedParams?.includes('twb') ? 'FIJADO' : `${selectedPoint.twb.toFixed(1)} °C`}
+                    </span>
+                  </button>
+
+                  {/* Tpr Punto de Rocío */}
+                  <button
+                    type="button"
+                    onClick={() => handleToggleFixParam('tdp')}
+                    className={`px-2 py-1 rounded border text-left flex items-center justify-between transition-all cursor-pointer ${
+                      selectedPoint.fixedParams?.includes('tdp')
+                        ? 'bg-teal-500/20 border-teal-400 text-teal-200 shadow-sm ring-1 ring-teal-400/50'
+                        : 'bg-white/5 border-white/10 text-slate-300 hover:border-teal-400/40 hover:text-white'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1">
+                      <Pin className={`w-2.5 h-2.5 ${selectedPoint.fixedParams?.includes('tdp') ? 'text-teal-400 fill-teal-400' : 'text-slate-500'}`} />
+                      <span className="font-bold">Tpr:</span>
+                    </div>
+                    <span className="text-[10px]">
+                      {selectedPoint.fixedParams?.includes('tdp') ? 'FIJADO' : `${selectedPoint.tdp.toFixed(1)} °C`}
+                    </span>
+                  </button>
+                </div>
+              </div>
+
               {/* Readout of all 8 calculated psychrometric variables */}
               <div className="space-y-1.5">
                 <span className="text-[10px] uppercase font-semibold tracking-wider text-slate-400">
@@ -536,6 +768,68 @@ export const SidebarControls: React.FC<SidebarControlsProps> = ({
       {/* Tab 2: HVAC Processes Builder */}
       {currentTab === 'processes' && (
         <div className="flex-1 overflow-y-auto p-4 space-y-5">
+          {/* OTS Thermodynamic Modeler Tools (Features C, D & E) */}
+          <div className="bg-slate-950/70 p-3.5 rounded-xl border border-slate-800 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] uppercase font-bold tracking-wider text-slate-300">
+                Simuladores Termodinámicos OTS
+              </span>
+              <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 font-bold border border-purple-500/30">
+                OTS C, D & E
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              {onOpenCoilModelerModal && (
+                <button
+                  type="button"
+                  onClick={onOpenCoilModelerModal}
+                  className="p-2.5 rounded-lg bg-cyan-950/30 hover:bg-cyan-900/40 border border-cyan-500/40 hover:border-cyan-400 text-left transition-all group"
+                >
+                  <div className="flex items-center gap-1.5 text-cyan-400 font-bold text-xs mb-1">
+                    <Snowflake className="w-3.5 h-3.5 group-hover:scale-110 transition-transform" />
+                    <span>Batería & ADP</span>
+                  </div>
+                  <p className="text-[10px] text-slate-400 leading-tight">
+                    Superficie, bypass (BF), condensados y riesgo de escarcha
+                  </p>
+                </button>
+              )}
+
+              {onOpenAirMixingModal && (
+                <button
+                  type="button"
+                  onClick={onOpenAirMixingModal}
+                  className="p-2.5 rounded-lg bg-amber-950/30 hover:bg-amber-900/40 border border-amber-500/40 hover:border-amber-400 text-left transition-all group"
+                >
+                  <div className="flex items-center gap-1.5 text-amber-400 font-bold text-xs mb-1">
+                    <Shuffle className="w-3.5 h-3.5 group-hover:scale-110 transition-transform" />
+                    <span>Mezcla Aire</span>
+                  </div>
+                  <p className="text-[10px] text-slate-400 leading-tight">
+                    2 corrientes, balance entálpico, niebla y free-cooling
+                  </p>
+                </button>
+              )}
+
+              {onOpenShrModal && (
+                <button
+                  type="button"
+                  onClick={onOpenShrModal}
+                  className="p-2.5 rounded-lg bg-purple-950/30 hover:bg-purple-900/40 border border-purple-500/40 hover:border-purple-400 text-left transition-all group sm:col-span-1 col-span-2"
+                >
+                  <div className="flex items-center gap-1.5 text-purple-400 font-bold text-xs mb-1">
+                    <Target className="w-3.5 h-3.5 group-hover:scale-110 transition-transform" />
+                    <span>SHR & Cargas</span>
+                  </div>
+                  <p className="text-[10px] text-slate-400 leading-tight">
+                    Rectas RSHR/GSHR, cálculo de ADP y dimensionado
+                  </p>
+                </button>
+              )}
+            </div>
+          </div>
+
           {/* Create new process box */}
           <div className="bg-slate-950/70 p-3.5 rounded-xl border border-slate-800 space-y-3">
             <span className="text-xs uppercase font-semibold tracking-wider text-slate-300">
@@ -726,12 +1020,153 @@ export const SidebarControls: React.FC<SidebarControlsProps> = ({
                           )}
                         </div>
                       )}
+
+                      {/* Process Airflow Input & Conversion */}
+                      <div className="col-span-2 pt-2 border-t border-slate-800/80 flex items-center justify-between">
+                        <span className="text-slate-400">Caudal de Aire:</span>
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="number"
+                            step="100"
+                            min="100"
+                            max="50000"
+                            defaultValue={Math.round(proc.volumeFlow || ptFrom.volumeFlow || 3000)}
+                            onBlur={(e) => {
+                              const val = parseFloat(e.target.value);
+                              if (!isNaN(val) && val > 0 && onUpdateProcessAirflow) {
+                                onUpdateProcessAirflow(proc.id, val);
+                              }
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                const val = parseFloat((e.target as HTMLInputElement).value);
+                                if (!isNaN(val) && val > 0 && onUpdateProcessAirflow) {
+                                  onUpdateProcessAirflow(proc.id, val);
+                                }
+                              }
+                            }}
+                            className="w-20 px-1.5 py-0.5 text-right bg-black border border-slate-700 rounded text-amber-300 font-mono font-bold text-[11px] focus:border-amber-400 focus:outline-none"
+                            title="Modifica el caudal para recalcular potencias sensibles, latentes y totales"
+                          />
+                          <span className="text-slate-500 font-mono text-[10px]">{units === 'IP' ? 'CFM' : 'm³/h'}</span>
+                        </div>
+                      </div>
+
+                      {/* Frost Risk Diagnostics */}
+                      {proc.isFrostRisk && (
+                        <div className="col-span-2 mt-1 p-2 rounded bg-rose-950/70 border border-rose-500/50 text-[11px] text-rose-200 flex items-start gap-1.5">
+                          <Snowflake className="w-4 h-4 text-rose-400 shrink-0 mt-0.5 animate-pulse" />
+                          <div>
+                            <span className="font-bold text-rose-300">Riesgo de Escarcha (Frost Alert):</span>
+                            <p className="text-[10px] text-rose-300/80 mt-0.5">
+                              Superficie o ADP ≤ 0°C con deshumectación ({proc.frostRateKgH?.toFixed(2)} kg/h hielo). Requiere ciclo de desescarche o batería de precalentamiento (RITE IT 1.2.4.3).
+                            </p>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 );
               })
             )}
           </div>
+        </div>
+      )}
+
+      {/* Tab: Scenarios & Operating Conditions (OTS Psychrochart Feature A) */}
+      {currentTab === 'scenarios' && (
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          <div className="flex items-center justify-between pb-1">
+            <span className="text-xs uppercase font-bold tracking-wider text-slate-300">
+              Escenarios de Operación
+            </span>
+            {onOpenConditionsModal && (
+              <button
+                type="button"
+                onClick={onOpenConditionsModal}
+                className="text-[11px] font-bold text-amber-400 hover:underline flex items-center gap-1 cursor-pointer"
+              >
+                <Sliders className="w-3 h-3" />
+                <span>Matriz Completa</span>
+              </button>
+            )}
+          </div>
+
+          <p className="text-xs text-slate-400">
+            Alterna entre condiciones de cálculo o superponlas en el diagrama psicrométrico para comparar envolventes.
+          </p>
+
+          <div className="space-y-2.5">
+            {conditions.map((cond) => {
+              const isActive = cond.id === activeConditionId;
+              return (
+                <div
+                  key={cond.id}
+                  className={`p-3 rounded-xl border transition-all text-xs space-y-2 ${
+                    isActive
+                      ? 'bg-amber-500/10 border-amber-500/50 shadow-md ring-1 ring-amber-500/30'
+                      : 'bg-black/40 border-white/10 hover:border-white/20'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="w-3 h-3 rounded-full shrink-0"
+                        style={{ backgroundColor: cond.color }}
+                      />
+                      <span className="font-bold text-white truncate max-w-[150px]">{cond.name}</span>
+                    </div>
+
+                    <div className="flex items-center gap-1">
+                      {onToggleOverlayCondition && (
+                        <button
+                          type="button"
+                          onClick={() => onToggleOverlayCondition(cond.id)}
+                          className={`p-1 rounded transition-colors cursor-pointer ${
+                            cond.isOverlayVisible
+                              ? 'text-sky-300 bg-sky-500/20'
+                              : 'text-slate-500 hover:text-white'
+                          }`}
+                          title={cond.isOverlayVisible ? 'Ocultar superposición en el gráfico' : 'Superponer en el gráfico'}
+                        >
+                          {cond.isOverlayVisible ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+                        </button>
+                      )}
+                      {!isActive && onSelectCondition && (
+                        <button
+                          type="button"
+                          onClick={() => onSelectCondition(cond.id)}
+                          className="px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white font-bold text-[11px] cursor-pointer"
+                        >
+                          Activar
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <p className="text-[11px] text-slate-400 line-clamp-2">
+                    {cond.description || `${cond.points.length} puntos, ${cond.processes.length} procesos.`}
+                  </p>
+
+                  <div className="flex items-center justify-between text-[10px] font-mono text-slate-500 pt-1 border-t border-white/5">
+                    <span>Puntos: {cond.points.length} | Proc: {cond.processes.length}</span>
+                    <span className="text-amber-400">Factor: {Math.round((cond.airflowMultiplier ?? 1) * 100)}%</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {onOpenConditionsModal && (
+            <button
+              type="button"
+              onClick={onOpenConditionsModal}
+              className="w-full btn-secondary text-xs justify-center gap-1.5 !text-amber-300 !border-amber-400/40 hover:!border-amber-400 cursor-pointer"
+            >
+              <Activity className="w-3.5 h-3.5" />
+              <span>Ver Matriz Comparativa Energética</span>
+            </button>
+          )}
         </div>
       )}
 
@@ -747,10 +1182,16 @@ export const SidebarControls: React.FC<SidebarControlsProps> = ({
               { key: 'rhCurves', label: 'Curvas de Humedad Relativa (10% - 90%)', color: 'text-sky-400' },
               { key: 'twbLines', label: 'Líneas de Bulbo Húmedo (Twb)', color: 'text-blue-400' },
               { key: 'enthalpyLines', label: 'Líneas de Entalpía Específica (h)', color: 'text-slate-300' },
+              { key: 'satEnthalpyScale', label: 'Escala Perimetral de Entalpía de Saturación', color: 'text-emerald-400' },
               { key: 'volumeLines', label: 'Líneas de Volumen Específico (v)', color: 'text-indigo-400' },
+              { key: 'enthalpyDeviations', label: 'Curvas de Desviación de Entalpía ASHRAE', color: 'text-amber-300' },
+              { key: 'satTempScale', label: 'Graduaciones Temp. Saturación en Curva', color: 'text-cyan-300' },
+              { key: 'shrProtractor', label: 'Transportador ASHRAE (FCS / SHR y ADP)', color: 'text-amber-400' },
+              { key: 'allReferenceRays', label: 'Haz Completo de Líneas de Referencia ASHRAE (0.00 - 1.00)', color: 'text-amber-300' },
+              { key: 'oversaturatedZone', label: 'Zona Supersaturada / Niebla (W > Wsat)', color: 'text-sky-300' },
+              { key: 'shfScale', label: 'Escala Vertical FCS / SHR (Margen Derecho)', color: 'text-orange-400' },
               { key: 'processes', label: 'Vectores y Procesos HVAC', color: 'text-cyan-400' },
               { key: 'pointLabels', label: 'Etiquetas de Nombres de Puntos', color: 'text-slate-200' },
-              { key: 'shrProtractor', label: 'Transportador ASHRAE (FCS / SHR y ADP)', color: 'text-amber-400' },
               { key: 'grid', label: 'Rejilla Ortogonal (Tbs / W)', color: 'text-slate-400' },
             ].map(({ key, label, color }) => {
               const active = layers[key as keyof ChartLayerVisibility];
@@ -875,6 +1316,38 @@ export const SidebarControls: React.FC<SidebarControlsProps> = ({
                       onChange={() => onToggleLayer(key as keyof ChartLayerVisibility)}
                       className="w-4 h-4 rounded border-slate-700 text-cyan-500 focus:ring-cyan-400 accent-cyan-400 cursor-pointer"
                     />
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Normativa Española RITE y Confort Bioclimático */}
+          <div className="pt-3 border-t border-slate-800 space-y-2">
+            <span className="text-xs uppercase font-semibold tracking-wider text-amber-400">
+              RITE & Confort Bioclimático (Givoni)
+            </span>
+            <div className="space-y-1.5">
+              {[
+                { key: 'comfortRite', label: 'Zona Confort RITE Oficial (IT 1.1.4.1)', color: 'text-amber-400', badge: 'Verano: 23-25°C 45-60% · Invierno: 21-23°C 40-50%' },
+                { key: 'comfortGivoni', label: 'Confort Bioclimático Givoni', color: 'text-emerald-300', badge: 'Envolvente pasiva y ventilación natural (20-27°C)' },
+              ].map(({ key, label, color, badge }) => {
+                const active = layers[key as keyof ChartLayerVisibility];
+                return (
+                  <label
+                    key={key}
+                    className="flex flex-col p-2.5 rounded-lg bg-slate-950 border border-slate-800 cursor-pointer hover:bg-slate-800/40 transition-colors"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className={`text-xs font-semibold ${color}`}>{label}</span>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(active)}
+                        onChange={() => onToggleLayer(key as keyof ChartLayerVisibility)}
+                        className="w-4 h-4 rounded border-slate-700 text-cyan-500 focus:ring-cyan-400 accent-cyan-400 cursor-pointer"
+                      />
+                    </div>
+                    <span className="text-[10px] text-slate-500 font-mono mt-0.5">{badge}</span>
                   </label>
                 );
               })}

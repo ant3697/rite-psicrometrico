@@ -9,7 +9,7 @@
  * - Relative Humidity: % (0 to 100)
  */
 
-import { StatePoint, PsychroInputs } from '../types/psychrometrics';
+import { StatePoint, PsychroInputs, PsychroParamKey } from '../types/psychrometrics';
 
 // Constants
 export const P_ATM_STANDARD = 101.325; // kPa standard atmospheric pressure at sea level
@@ -364,7 +364,257 @@ export function solveStatePoint(
     volumeFlow,
     massFlow,
     isLocked: existingPoint?.isLocked ?? false,
+    hidden: existingPoint?.hidden ?? false,
+    fixedParams: existingPoint?.fixedParams ?? [],
+    fixedValues: existingPoint?.fixedValues ?? {},
   };
+}
+
+export const PARAM_LABELS_ES: Record<PsychroParamKey, { short: string; full: string; unit: string }> = {
+  tdb: { short: 'Tbs', full: 'T. Bulbo Seco (Tbs)', unit: '°C' },
+  rh: { short: 'HR', full: 'Humedad Relativa (HR)', unit: '%' },
+  h: { short: 'h', full: 'Entalpía Específica (h)', unit: 'kJ/kg' },
+  w: { short: 'w', full: 'Humedad Específica (w)', unit: 'g/kg' },
+  twb: { short: 'Tbh', full: 'T. Bulbo Húmedo (Tbh)', unit: '°C' },
+  tdp: { short: 'Tpr', full: 'T. Punto Rocío (Tpr)', unit: '°C' },
+  v: { short: 'v', full: 'Volumen Específico (v)', unit: 'm³/kg' },
+};
+
+/**
+ * Solve a psychrometric state point from any two arbitrary thermodynamic properties.
+ */
+export function solvePointFromTwoProperties(
+  key1: PsychroParamKey,
+  val1: number,
+  key2: PsychroParamKey,
+  val2: number,
+  pAtm: number = P_ATM_STANDARD
+): { tdb: number; w: number } {
+  // Normalize w if given in g/kg (> 2.0)
+  const normVal1 = key1 === 'w' && val1 > 2.0 ? val1 / 1000 : val1;
+  const normVal2 = key2 === 'w' && val2 > 2.0 ? val2 / 1000 : val2;
+
+  // Case 1: One of the properties is dry-bulb temperature (tdb)
+  if (key1 === 'tdb' || key2 === 'tdb') {
+    const tdb = key1 === 'tdb' ? normVal1 : normVal2;
+    const otherKey = key1 === 'tdb' ? key2 : key1;
+    const otherVal = key1 === 'tdb' ? normVal2 : normVal1;
+
+    let w = 0.007;
+    if (otherKey === 'w') {
+      w = otherVal;
+    } else if (otherKey === 'rh') {
+      w = getWFromTdbRh(tdb, otherVal, pAtm);
+    } else if (otherKey === 'h') {
+      w = getWFromEnthalpy(tdb, otherVal);
+    } else if (otherKey === 'twb') {
+      w = getWFromTdbTwb(tdb, Math.min(tdb, otherVal), pAtm);
+    } else if (otherKey === 'tdp') {
+      const pv = getSaturationVaporPressure(Math.min(tdb, otherVal));
+      w = getHumidityRatioFromPv(pv, pAtm);
+    } else if (otherKey === 'v') {
+      const vDry = (R_DA * (tdb + 273.15)) / pAtm;
+      w = Math.max(0, (otherVal / vDry - 1) / 1.6078);
+    }
+    const ws = getSaturationHumidityRatio(tdb, pAtm);
+    return { tdb, w: Math.max(0.0001, Math.min(ws, w)) };
+  }
+
+  // Case 2: One of the properties is humidity ratio (w) and neither is tdb
+  if (key1 === 'w' || key2 === 'w') {
+    const w = key1 === 'w' ? normVal1 : normVal2;
+    const otherKey = key1 === 'w' ? key2 : key1;
+    const otherVal = key1 === 'w' ? normVal2 : normVal1;
+
+    let tdb = 20;
+    if (otherKey === 'rh') {
+      const pv = getPvFromHumidityRatio(w, pAtm);
+      const pws = pv / Math.max(0.001, otherVal / 100);
+      tdb = getDewPoint(pws);
+    } else if (otherKey === 'h') {
+      tdb = (otherVal - w * H_FG) / (C_PA + w * C_PW);
+    } else if (otherKey === 'twb') {
+      let low = otherVal;
+      let high = otherVal + 50;
+      for (let i = 0; i < 25; i++) {
+        const mid = (low + high) / 2;
+        const wEst = getWFromTdbTwb(mid, otherVal, pAtm);
+        if (wEst > w) {
+          low = mid;
+        } else {
+          high = mid;
+        }
+      }
+      tdb = (low + high) / 2;
+    } else if (otherKey === 'tdp') {
+      const pv = getSaturationVaporPressure(otherVal);
+      return { tdb: Math.max(otherVal, 20), w: getHumidityRatioFromPv(pv, pAtm) };
+    } else if (otherKey === 'v') {
+      tdb = (otherVal * pAtm) / (R_DA * (1 + 1.6078 * w)) - 273.15;
+    }
+    const ws = getSaturationHumidityRatio(tdb, pAtm);
+    return { tdb, w: Math.max(0.0001, Math.min(ws, w)) };
+  }
+
+  // Case 3: Enthalpy (h) and Relative Humidity (rh)
+  if ((key1 === 'h' && key2 === 'rh') || (key1 === 'rh' && key2 === 'h')) {
+    const h = key1 === 'h' ? normVal1 : normVal2;
+    const rh = key1 === 'rh' ? normVal1 : normVal2;
+    let low = -15;
+    let high = 55;
+    for (let i = 0; i < 25; i++) {
+      const mid = (low + high) / 2;
+      const wMid = getWFromTdbRh(mid, rh, pAtm);
+      const hMid = getEnthalpy(mid, wMid);
+      if (hMid < h) {
+        low = mid;
+      } else {
+        high = mid;
+      }
+    }
+    const tdb = (low + high) / 2;
+    const w = getWFromTdbRh(tdb, rh, pAtm);
+    return { tdb, w };
+  }
+
+  // Case 4: Wet-bulb (twb) and Relative Humidity (rh)
+  if ((key1 === 'twb' && key2 === 'rh') || (key1 === 'rh' && key2 === 'twb')) {
+    const twb = key1 === 'twb' ? normVal1 : normVal2;
+    const rh = key1 === 'rh' ? normVal1 : normVal2;
+    const solved = solveStatePoint({ mode: 'twb_rh', twb, rh }, pAtm);
+    return { tdb: solved.tdb, w: solved.w };
+  }
+
+  // Case 5: Enthalpy (h) and Wet-bulb (twb)
+  if ((key1 === 'h' && key2 === 'twb') || (key1 === 'twb' && key2 === 'h')) {
+    const h = key1 === 'h' ? normVal1 : normVal2;
+    const twb = key1 === 'twb' ? normVal1 : normVal2;
+    let low = twb;
+    let high = twb + 45;
+    for (let i = 0; i < 25; i++) {
+      const mid = (low + high) / 2;
+      const wMid = getWFromTdbTwb(mid, twb, pAtm);
+      const hMid = getEnthalpy(mid, wMid);
+      if (hMid < h) {
+        low = mid;
+      } else {
+        high = mid;
+      }
+    }
+    const tdb = (low + high) / 2;
+    const w = getWFromTdbTwb(tdb, twb, pAtm);
+    return { tdb, w };
+  }
+
+  // General robust root-finder for any other arbitrary pair
+  let low = -15;
+  let high = 55;
+  let bestTdb = 22;
+  let bestW = 0.008;
+
+  for (let i = 0; i < 22; i++) {
+    const mid = (low + high) / 2;
+    let wEst = 0.007;
+    if (key1 === 'rh') wEst = getWFromTdbRh(mid, normVal1, pAtm);
+    else if (key1 === 'h') wEst = getWFromEnthalpy(mid, normVal1);
+    else if (key1 === 'twb') wEst = getWFromTdbTwb(mid, normVal1, pAtm);
+    else if (key1 === 'tdp') wEst = getHumidityRatioFromPv(getSaturationVaporPressure(normVal1), pAtm);
+
+    let val2Est = 0;
+    if (key2 === 'rh') val2Est = getRelativeHumidity(mid, wEst, pAtm);
+    else if (key2 === 'h') val2Est = getEnthalpy(mid, wEst);
+    else if (key2 === 'twb') val2Est = getWetBulb(mid, wEst, pAtm);
+    else if (key2 === 'v') val2Est = getSpecificVolume(mid, wEst, pAtm);
+
+    if (val2Est < normVal2) {
+      low = mid;
+    } else {
+      high = mid;
+    }
+    bestTdb = mid;
+    bestW = wEst;
+  }
+
+  const ws = getSaturationHumidityRatio(bestTdb, pAtm);
+  return { tdb: bestTdb, w: Math.max(0.0001, Math.min(ws, bestW)) };
+}
+
+/**
+ * Solves state point when user updates a single parameter, respecting any fixed/pinned properties.
+ */
+export function solveConstrainedStatePoint(
+  currentPoint: StatePoint,
+  modifiedKey: PsychroParamKey,
+  newValue: number,
+  pAtm: number = P_ATM_STANDARD
+): StatePoint {
+  // Other parameters currently fixed on this point
+  const fixedKeys = (currentPoint.fixedParams || []).filter((k) => k !== modifiedKey);
+
+  let targetTdb = currentPoint.tdb;
+  let targetW = currentPoint.w;
+
+  if (fixedKeys.length === 0) {
+    // Standard unconstrained modification:
+    // User request fix: When changing Tbs (bulbo seco), keep w constant (sensible heating/cooling)!
+    if (modifiedKey === 'tdb') {
+      targetTdb = newValue;
+      const ws = getSaturationHumidityRatio(targetTdb, pAtm);
+      targetW = Math.max(0.0001, Math.min(ws, currentPoint.w));
+    } else if (modifiedKey === 'w') {
+      targetTdb = currentPoint.tdb;
+      const rawW = newValue > 2.0 ? newValue / 1000 : newValue;
+      const ws = getSaturationHumidityRatio(targetTdb, pAtm);
+      targetW = Math.max(0.0001, Math.min(ws, rawW));
+    } else if (modifiedKey === 'rh') {
+      targetTdb = currentPoint.tdb;
+      targetW = getWFromTdbRh(targetTdb, newValue, pAtm);
+    } else if (modifiedKey === 'h') {
+      targetTdb = currentPoint.tdb;
+      const rawW = getWFromEnthalpy(targetTdb, newValue);
+      const ws = getSaturationHumidityRatio(targetTdb, pAtm);
+      targetW = Math.max(0.0001, Math.min(ws, rawW));
+    } else if (modifiedKey === 'twb') {
+      targetTdb = currentPoint.tdb;
+      const clampedTwb = Math.min(targetTdb, Math.max(-10, newValue));
+      const rawW = getWFromTdbTwb(targetTdb, clampedTwb, pAtm);
+      const ws = getSaturationHumidityRatio(targetTdb, pAtm);
+      targetW = Math.max(0.0001, Math.min(ws, rawW));
+    } else if (modifiedKey === 'tdp') {
+      targetTdb = currentPoint.tdb;
+      const clampedTdp = Math.min(targetTdb, Math.max(-20, newValue));
+      const pv = getSaturationVaporPressure(clampedTdp);
+      const rawW = getHumidityRatioFromPv(pv, pAtm);
+      const ws = getSaturationHumidityRatio(targetTdb, pAtm);
+      targetW = Math.max(0.0001, Math.min(ws, rawW));
+    } else if (modifiedKey === 'v') {
+      targetTdb = currentPoint.tdb;
+      const vDry = (R_DA * (targetTdb + 273.15)) / pAtm;
+      const rawW = (newValue / vDry - 1) / 1.6078;
+      const ws = getSaturationHumidityRatio(targetTdb, pAtm);
+      targetW = Math.max(0.0001, Math.min(ws, Math.max(0, rawW)));
+    }
+  } else {
+    // Constrained by at least one fixed parameter!
+    const fixedKey = fixedKeys[0];
+    const fixedVal = currentPoint.fixedValues?.[fixedKey] ?? (fixedKey === 'w' ? currentPoint.w : currentPoint[fixedKey]);
+
+    const solved = solvePointFromTwoProperties(modifiedKey, newValue, fixedKey, fixedVal, pAtm);
+    targetTdb = solved.tdb;
+    targetW = solved.w;
+  }
+
+  // Update fixedValues if the modified parameter itself is pinned
+  const updatedFixedValues = { ...(currentPoint.fixedValues || {}) };
+  if (currentPoint.fixedParams?.includes(modifiedKey)) {
+    updatedFixedValues[modifiedKey] = modifiedKey === 'w' && newValue > 2.0 ? newValue / 1000 : newValue;
+  }
+
+  return solveStatePoint({ mode: 'tdb_w', tdb: targetTdb, w: targetW }, pAtm, {
+    ...currentPoint,
+    fixedParams: currentPoint.fixedParams,
+    fixedValues: updatedFixedValues,
+  });
 }
 
 /**
@@ -407,26 +657,57 @@ export const UnitConvert = {
 };
 
 /**
- * Standard Comfort Zones (ASHRAE 55-2020)
- * Polygons defined in (Tdb, W in kg/kg) coordinates.
+ * Standard Comfort Zones according to ASHRAE Standard 55-2020 (Graphic Comfort Zone Method)
+ * - Upper humidity limit: strict horizontal boundary at W_max = 0.012 kg H2O / kg dry air (Tdp = 16.8°C at 101.325 kPa)
+ * - Summer (0.5 clo, 1.0-1.3 met, -0.5 <= PMV <= +0.5, 80-90% occupant acceptability)
+ * - Winter (1.0 clo, 1.0-1.3 met, -0.5 <= PMV <= +0.5, 80-90% occupant acceptability)
+ * Includes intermediate vertices along horizontal boundaries to ensure 100% geometric fidelity across both Carrier and Mollier projections.
  */
 export const ASHRAE55_SUMMER = [
-  { tdb: 23.0, rh: 80 },
-  { tdb: 26.0, rh: 65 },
-  { tdb: 27.5, rh: 40 },
-  { tdb: 25.5, rh: 20 },
-  { tdb: 22.5, rh: 25 },
-  { tdb: 21.8, rh: 60 },
+  { tdb: 23.5, w: 0.012, rh: 66 },   // Top-Left (W = 12 g/kg, PMV = -0.5)
+  { tdb: 25.0, w: 0.012, rh: 60.5 }, // Top-Mid
+  { tdb: 26.5, w: 0.012, rh: 55 },   // Top-Right (W = 12 g/kg, PMV = +0.5)
+  { tdb: 27.5, w: 0.006, rh: 26 },   // Right flank (PMV = +0.5)
+  { tdb: 28.0, w: 0.002, rh: 8.5 },  // Bottom-Right (PMV = +0.5)
+  { tdb: 26.25, w: 0.002, rh: 9.5 }, // Bottom-Mid
+  { tdb: 24.5, w: 0.002, rh: 10.5 }, // Bottom-Left (PMV = -0.5)
+  { tdb: 24.0, w: 0.006, rh: 32 },   // Left flank (PMV = -0.5)
 ];
 
 export const ASHRAE55_WINTER = [
-  { tdb: 20.0, rh: 80 },
-  { tdb: 23.5, rh: 60 },
-  { tdb: 24.5, rh: 35 },
-  { tdb: 23.0, rh: 18 },
-  { tdb: 19.5, rh: 25 },
-  { tdb: 19.0, rh: 60 },
+  { tdb: 20.0, w: 0.012, rh: 82 },   // Top-Left (W = 12 g/kg, PMV = -0.5)
+  { tdb: 21.75, w: 0.012, rh: 74 },  // Top-Mid
+  { tdb: 23.5, w: 0.012, rh: 66 },   // Top-Right (W = 12 g/kg, PMV = +0.5)
+  { tdb: 24.5, w: 0.006, rh: 31.5 }, // Right flank (PMV = +0.5)
+  { tdb: 25.0, w: 0.002, rh: 10 },   // Bottom-Right (PMV = +0.5)
+  { tdb: 23.0, w: 0.002, rh: 11.5 }, // Bottom-Mid
+  { tdb: 21.0, w: 0.002, rh: 13 },   // Bottom-Left (PMV = -0.5)
+  { tdb: 20.5, w: 0.006, rh: 40 },   // Left flank (PMV = -0.5)
 ];
+
+/**
+ * Validates whether a psychrometric state point falls 100% within the official
+ * ASHRAE Standard 55-2020 Graphic Comfort Zone for the selected season.
+ * - Strict upper limit: W <= 0.012 kg/kg (12 g/kg dry air)
+ * - Summer (0.5 clo): Tdb within [24.7 - 100*w, 28.3 - 150*w]
+ * - Winter (1.0 clo): Tdb within [21.2 - 100*w, 25.3 - 150*w]
+ */
+export function isPointInASHRAE55Comfort(
+  tdb: number,
+  w: number,
+  season: 'summer' | 'winter' = 'summer'
+): boolean {
+  if (w > 0.01205 || w < 0.0015) return false;
+  if (season === 'summer') {
+    const tMin = 24.7 - 100 * w;
+    const tMax = 28.3 - 150 * w;
+    return tdb >= tMin - 0.1 && tdb <= tMax + 0.1;
+  } else {
+    const tMin = 21.2 - 100 * w;
+    const tMax = 25.3 - 150 * w;
+    return tdb >= tMin - 0.1 && tdb <= tMax + 0.1;
+  }
+}
 
 /**
  * Marco Conjunto Europeo: UNE-EN ISO 7730 & UNE-EN 16798-1

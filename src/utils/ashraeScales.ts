@@ -10,11 +10,12 @@ import {
 } from './psychrolib';
 
 /**
- * Thermodynamic and Geometric calculations for official ASHRAE Chart No. 1:
- * - ASHRAE Sensible Heat Ratio (SHR) Protractor
+ * Thermodynamic and Geometric calculations for official ASHRAE Chart No. 1 and Mollier h-x Chart:
+ * - ASHRAE Sensible Heat Ratio (SHR / FCS) Protractor
+ * - Mollier Sensible Heat Ratio (SHR / FCS) Protractor
  * - Enthalpy Deviation Lines (Curvas de Desviación de Entalpía)
+ * - Apparatus Dew Point (ADP / Punto de Rocío del Aparato) Exact Solver
  * - Perimeter Enthalpy Scale along Saturation boundary
- * - Sensible Heat Factor vertical scale
  */
 
 export interface ProtractorRay {
@@ -46,8 +47,8 @@ export const ASHRAE_SHR_VALUES: Array<{ shr: number; label: string; isMajor: boo
   { shr: 0.85, label: '.85', isMajor: false, deltaHDeltaW: 16.7 },
   { shr: 0.80, label: '.80', isMajor: true, deltaHDeltaW: 12.5 },
   { shr: 0.75, label: '.75', isMajor: false, deltaHDeltaW: 10.0 },
-  { shr: 0.70, label: '.70', isMajor: true, deltaHDeltaW: 8.3 },
-  { shr: 0.65, label: '.65', isMajor: false, deltaHDeltaW: 7.1 },
+  { shr: 0.70, label: '.70', isMajor: true, deltaHDeltaW: 8.33 },
+  { shr: 0.65, label: '.65', isMajor: false, deltaHDeltaW: 7.14 },
   { shr: 0.60, label: '.60', isMajor: true, deltaHDeltaW: 6.25 },
   { shr: 0.55, label: '.55', isMajor: false, deltaHDeltaW: 5.56 },
   { shr: 0.50, label: '.50', isMajor: true, deltaHDeltaW: 5.0 },
@@ -60,6 +61,26 @@ export const ASHRAE_SHR_VALUES: Array<{ shr: number; label: string; isMajor: boo
   { shr: -0.20, label: '-.20', isMajor: false, deltaHDeltaW: 2.08 },
   { shr: -0.50, label: '-.50', isMajor: true, deltaHDeltaW: 1.67 },
   { shr: -1.00, label: '-1.0', isMajor: true, deltaHDeltaW: 1.25 },
+];
+
+// Canonical Mollier Protractor SHR tick values
+export const MOLLIER_SHR_VALUES: Array<{ shr: number; label: string; isMajor: boolean; deltaHDeltaW?: number }> = [
+  { shr: 1.00, label: '1.0', isMajor: true, deltaHDeltaW: Infinity },
+  { shr: 0.90, label: '0.9', isMajor: true, deltaHDeltaW: 25.0 },
+  { shr: 0.80, label: '0.8', isMajor: true, deltaHDeltaW: 12.5 },
+  { shr: 0.70, label: '0.7', isMajor: true, deltaHDeltaW: 8.33 },
+  { shr: 0.60, label: '0.6', isMajor: true, deltaHDeltaW: 6.25 },
+  { shr: 0.50, label: '0.5', isMajor: true, deltaHDeltaW: 5.0 },
+  { shr: 0.40, label: '0.4', isMajor: true, deltaHDeltaW: 4.17 },
+  { shr: 0.30, label: '0.3', isMajor: true, deltaHDeltaW: 3.57 },
+  { shr: 0.20, label: '0.2', isMajor: true, deltaHDeltaW: 3.12 },
+  { shr: 0.10, label: '0.1', isMajor: false, deltaHDeltaW: 2.78 },
+  { shr: 0.00, label: '0.0', isMajor: true, deltaHDeltaW: 2.50 },
+  { shr: -0.20, label: '-0.2', isMajor: false, deltaHDeltaW: 2.08 },
+  { shr: -0.50, label: '-0.5', isMajor: true, deltaHDeltaW: 1.67 },
+  { shr: -1.00, label: '-1.0', isMajor: true, deltaHDeltaW: 1.25 },
+  { shr: -2.00, label: '-2.0', isMajor: false, deltaHDeltaW: 0.83 },
+  { shr: -4.00, label: '-4.0', isMajor: false, deltaHDeltaW: 0.50 },
 ];
 
 /**
@@ -77,7 +98,7 @@ export function getSlopeFromSHR(shr: number): number {
 }
 
 /**
- * Calculates angle in SVG space for an SHR ray taking into account the canvas scaling.
+ * Calculates angle in SVG space for an SHR ray on Carrier psychrometric chart (Tdb on X, W on Y).
  * 0 radians = pure sensible cooling (horizontal left: dx < 0, dy = 0).
  * PI / 2 radians = pure latent cooling (vertical down: dx = 0, dy > 0).
  */
@@ -92,14 +113,81 @@ export function getProtractorAngle(
     return Math.PI / 2; // Exact 90 degrees straight down in SVG
   }
   const dWdT = getSlopeFromSHR(shr);
-  // Scale factors (pixels per unit)
   const scaleX = plotWidth / spanT;
   const scaleY = plotHeight / spanW;
 
-  // In SVG coordinates, moving towards cooler temperatures (left, -X) and lower moisture (down, +Y in SVG).
-  // The physical angle of the process vector:
-  const angle = Math.atan2(dWdT * scaleY, scaleX);
-  return angle;
+  return Math.atan2(dWdT * scaleY, scaleX);
+}
+
+/**
+ * Inverts angle in SVG space back to Sensible Heat Ratio for Carrier chart.
+ */
+export function getCarrierSHRFromAngle(
+  angleRad: number,
+  plotWidth: number,
+  plotHeight: number,
+  spanT: number,
+  spanW: number
+): number {
+  const scaleX = plotWidth / spanT;
+  const scaleY = plotHeight / spanW;
+  const cpa = 1.006;
+  const hfg = 2501.0;
+  const factor = (cpa / hfg) * (scaleY / scaleX);
+  const tanA = Math.tan(angleRad);
+  if (tanA <= 0) return 1.0;
+  const shr = factor / (factor + tanA);
+  return Math.max(-2.0, Math.min(1.0, shr));
+}
+
+/**
+ * Calculates angle in SVG space for an SHR ray on Mollier h-x diagram (W on X, Tdb on Y).
+ * 0 radians = pure latent dehumidification (horizontal left: dx < 0, dy = 0).
+ * PI / 2 radians = pure sensible cooling (vertical down: dx = 0, dy > 0).
+ * 100% strictly parallel to process line on Mollier screen.
+ */
+export function getMollierProtractorAngle(
+  shr: number,
+  plotWidth: number,
+  plotHeight: number,
+  spanT: number,
+  spanW: number
+): number {
+  if (shr >= 1.0) {
+    return Math.PI / 2; // Exact 90 degrees straight down in SVG (pure sensible cooling)
+  }
+  if (shr <= 0.0) {
+    return 0; // Pure latent
+  }
+  const scaleX = plotWidth / spanW;
+  const scaleY = plotHeight / spanT;
+  const cpa = 1.006;
+  const hfg = 2501.0;
+  // dy / -dx = (dT * scaleY) / (dW * scaleX) = (scaleY / scaleX) * (hfg / cpa) * (shr / (1 - shr))
+  const factor = (hfg / cpa) * (scaleY / scaleX);
+  return Math.atan(factor * (shr / Math.max(0.0001, 1 - shr)));
+}
+
+/**
+ * Inverts angle in SVG space back to Sensible Heat Ratio for Mollier chart.
+ */
+export function getMollierSHRFromAngle(
+  gammaRad: number,
+  plotWidth: number,
+  plotHeight: number,
+  spanT: number,
+  spanW: number
+): number {
+  if (gammaRad >= Math.PI / 2 - 0.001) return 1.0;
+  if (gammaRad <= 0.001) return 0.0;
+  const scaleX = plotWidth / spanW;
+  const scaleY = plotHeight / spanT;
+  const cpa = 1.006;
+  const hfg = 2501.0;
+  const factor = (hfg / cpa) * (scaleY / scaleX);
+  const tanG = Math.tan(gammaRad);
+  const shr = tanG / (factor + tanG);
+  return Math.max(0.0, Math.min(1.0, shr));
 }
 
 /**
@@ -135,7 +223,7 @@ export function computeEnthalpyDeviations(
 
       for (let w = lowW; w <= highW; w += 0.0004) {
         const hActual = getEnthalpy(tdb, w);
-        const twb = getWetBulb(tdb, getRelativeHumidity(tdb, w, pressure), pressure);
+        const twb = getWetBulb(tdb, w, pressure);
         const wSatTwb = getSaturationHumidityRatio(twb, pressure);
         const hSatTwb = getEnthalpy(twb, wSatTwb);
         const curDev = hActual - hSatTwb;
@@ -214,7 +302,7 @@ export function getAshraeReferencePoint(pressure: number = P_ATM_STANDARD) {
   const rh = 50.0;
   const w = getWFromTdbRh(tdb, rh, pressure);
   const h = getEnthalpy(tdb, w);
-  const twb = getWetBulb(tdb, rh, pressure);
+  const twb = getWetBulb(tdb, w, pressure);
   return { tdb, rh, w, h, twb };
 }
 
@@ -222,6 +310,7 @@ export function getAshraeReferencePoint(pressure: number = P_ATM_STANDARD) {
  * Calculates the exact thermodynamic Apparatus Dew Point (ADP / Punto de Rocío del Aparato)
  * for a room state (tdb, w) and a Sensible Heat Ratio (SHR).
  * Finds the intersection of the Room Condition Line with the 100% saturation curve.
+ * Returns null if no physical intersection exists (e.g. coil requires reheat or chemical drying).
  */
 export function calculateADP(
   tdb: number,
@@ -230,48 +319,80 @@ export function calculateADP(
   pressure: number = P_ATM_STANDARD
 ): { tdbAdp: number; wAdp: number; hAdp: number } | null {
   if (shr <= 0 || shr > 1.0) {
-    // Pure latent or unconventional process
     const wSat = getSaturationHumidityRatio(tdb, pressure);
     if (w >= wSat) {
-      return { tdbAdp: tdb, wAdp: wSat, hAdp: getEnthalpy(tdb, wSat) };
+      return { tdbAdp: Number(tdb.toFixed(2)), wAdp: Number(wSat.toFixed(5)), hAdp: Number(getEnthalpy(tdb, wSat).toFixed(2)) };
     }
+    return null;
+  }
+
+  const wSatTdb = getSaturationHumidityRatio(tdb, pressure);
+  if (w >= wSatTdb) {
+    return { tdbAdp: Number(tdb.toFixed(2)), wAdp: Number(wSatTdb.toFixed(5)), hAdp: Number(getEnthalpy(tdb, wSatTdb).toFixed(2)) };
   }
 
   const dWdT = getSlopeFromSHR(shr);
+  if (dWdT <= 0) {
+    // Pure sensible process (SHR = 1.0): horizontal line w = const
+    let lowT = -25;
+    let highT = tdb;
+    if (getSaturationHumidityRatio(lowT, pressure) > w) return null;
+    for (let i = 0; i < 30; i++) {
+      const midT = (lowT + highT) / 2;
+      if (getSaturationHumidityRatio(midT, pressure) < w) lowT = midT;
+      else highT = midT;
+    }
+    const tAdp = (lowT + highT) / 2;
+    return {
+      tdbAdp: Number(tAdp.toFixed(2)),
+      wAdp: Number(w.toFixed(5)),
+      hAdp: Number(getEnthalpy(tAdp, w).toFixed(2)),
+    };
+  }
 
-  // Line equation: wLine(T) = w - dWdT * (tdb - T)
-  // We search for T in [-10, tdb] such that wSat(T) - wLine(T) = 0
-  let lowT = -10;
+  // Temperature where the line hits w = 0 (absolute dryness)
+  const tZero = tdb - w / dWdT;
+  const minT = Math.max(-25, tZero);
+
+  // Search for bracket where f(T) = wSat(T) - wLine(T) crosses 0
+  // At tdb: wSat(tdb) > w (room is unsaturated), so f(tdb) > 0
+  let bracketFound = false;
+  let lowT = minT;
   let highT = tdb;
 
-  // Check if at tdb state is already saturated
-  const wSatTdb = getSaturationHumidityRatio(tdb, pressure);
-  if (w >= wSatTdb) {
-    return { tdbAdp: tdb, wAdp: wSatTdb, hAdp: getEnthalpy(tdb, wSatTdb) };
+  const steps = 60;
+  const dt = (tdb - minT) / steps;
+  let prevT = tdb;
+
+  for (let i = 1; i <= steps; i++) {
+    const curT = tdb - i * dt;
+    const curWLine = w - dWdT * (tdb - curT);
+    if (curWLine < 0) break;
+    const curWSat = getSaturationHumidityRatio(curT, pressure);
+    const curF = curWSat - curWLine;
+
+    if (curF <= 0) {
+      lowT = curT;
+      highT = prevT;
+      bracketFound = true;
+      break;
+    }
+    prevT = curT;
   }
 
-  // Value at highT: wSat(tdb) - w > 0
-  const fHigh = wSatTdb - w;
-
-  // Check if there is an intersection in range
-  const wLineLow = w - dWdT * (tdb - lowT);
-  const wSatLow = getSaturationHumidityRatio(lowT, pressure);
-  const fLow = wSatLow - wLineLow;
-
-  if (fHigh * fLow > 0) {
-    // If no sign change down to -10°C, search lower down to -30°C
-    lowT = -30;
+  if (!bracketFound) {
+    // Room condition line does not cross 100% saturation in the physical zone
+    return null;
   }
 
-  // Bisection search
-  for (let i = 0; i < 28; i++) {
+  // Refine intersection root with bisection
+  for (let i = 0; i < 30; i++) {
     const midT = (lowT + highT) / 2;
     const wLineMid = w - dWdT * (tdb - midT);
     const wSatMid = getSaturationHumidityRatio(midT, pressure);
     const diff = wSatMid - wLineMid;
 
     if (diff > 0) {
-      // Saturation is above the line, root is at lower T
       highT = midT;
     } else {
       lowT = midT;

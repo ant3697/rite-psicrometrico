@@ -7,8 +7,11 @@ import {
   ChartType,
   UnitSystem,
   IsolatedProcessInfo,
+  PsychroParamKey,
+  OperatingCondition,
 } from '../types/psychrometrics';
 import {
+  solveConstrainedStatePoint,
   getSaturationHumidityRatio,
   getWFromTdbRh,
   getEnthalpy,
@@ -32,16 +35,32 @@ import {
 import {
   computeEnthalpyDeviations,
   ASHRAE_SHR_VALUES,
+  MOLLIER_SHR_VALUES,
   getSlopeFromSHR,
+  getProtractorAngle,
+  getCarrierSHRFromAngle,
+  getMollierProtractorAngle,
+  getMollierSHRFromAngle,
   calculateADP,
   getAshraeReferencePoint,
 } from '../utils/ashraeScales';
 import { FlyCarpetCarrierDiagram } from './FlyCarpetCarrierDiagram';
 import { FlyCarpetMollierDiagram } from './FlyCarpetMollierDiagram';
+import { FloatingPointWindow } from './FloatingPointWindow';
+import {
+  getCarrierDewPointOnSaturation,
+  getCarrierWetBulbPointOnSaturation,
+  getMollierDewPointOnSaturation,
+  getMollierWetBulbPointOnSaturation,
+  getCarrierEnthalpyScalePoint,
+  CARRIER_SAT_PTS,
+  MOLLIER_SAT_PTS,
+} from '../utils/carrierDiagramCoordinates';
 import {
   ZoomIn,
   ZoomOut,
   Maximize2,
+  Minimize2,
   Crosshair,
   RotateCcw,
   Move,
@@ -52,8 +71,36 @@ import {
   Target,
   Eye,
   EyeOff,
+  Layers,
+  Lock,
+  Unlock,
+  Pen,
 } from 'lucide-react';
 import { ChartContextMenu, ContextMenuTarget } from './ChartContextMenu';
+import { FloatingLayersWindow } from './FloatingLayersWindow';
+import { WhiteboardAnnotationOverlay } from './WhiteboardAnnotationOverlay';
+
+export function getPointDesignation(name: string, fallbackIndex?: number): string {
+  if (!name) return fallbackIndex !== undefined ? `P${fallbackIndex + 1}` : 'P1';
+  const clean = name.trim();
+  if (clean.includes(':')) {
+    const part = clean.split(':')[0].trim();
+    if (part.length <= 8) return part;
+  }
+  if (clean.includes('-')) {
+    const part = clean.split('-')[0].trim();
+    if (part.length <= 6) return part;
+  }
+  const puntoMatch = clean.match(/^Punto\s*(\d+)/i) || clean.match(/^P\s*(\d+)/i);
+  if (puntoMatch) return `P${puntoMatch[1]}`;
+  const pDirect = clean.match(/^(P\d+)/i);
+  if (pDirect) return pDirect[1].toUpperCase();
+  const first = clean.split(/\s+/)[0];
+  if (first.length <= 4) return first;
+  return fallbackIndex !== undefined ? `P${fallbackIndex + 1}` : clean.slice(0, 3).toUpperCase();
+}
+
+export type LabelDisplayMode = 'none' | 'basic' | 'all';
 
 interface PsychrometricChartProps {
   points: StatePoint[];
@@ -66,16 +113,36 @@ interface PsychrometricChartProps {
   chartType: ChartType;
   units: UnitSystem;
   layers: ChartLayerVisibility;
+  labelDisplayMode?: LabelDisplayMode;
+  onChangeLabelDisplayMode?: (mode: LabelDisplayMode) => void;
   isolatedProcessInfo?: IsolatedProcessInfo | null;
   isolatedPointIds?: string[];
   isolatedProcessIds?: string[];
   onSetIsolatedProcessInfo?: (info: IsolatedProcessInfo | null) => void;
   onDeletePoint?: (id: string) => void;
+  onToggleHidePoint?: (id: string) => void;
   onDeleteProcess?: (id: string) => void;
   onDuplicatePoint?: (id: string) => void;
   onLocateModuleInAhu?: (moduleIdOrPointId: string) => void;
   onToggleLayer?: (layer: keyof ChartLayerVisibility) => void;
   isSplitView?: boolean;
+  teachingMode?: boolean;
+  teachingGuidePointId?: string | null;
+  teachingGuideParam?: 'tdb' | 'rh' | 'h' | 'w' | 'twb' | 'tdp' | 'v' | null;
+  teachingMixtureInfo?: {
+    point1: StatePoint;
+    point2: StatePoint;
+    mixturePoint: StatePoint;
+    ratio: number;
+  } | null;
+  isPanZoomLocked?: boolean;
+  onTogglePanZoomLock?: () => void;
+  onUpdatePoint?: (point: StatePoint) => void;
+  onToggleFixParam?: (pointId: string, param: PsychroParamKey) => void;
+  onClearFixedParams?: (pointId: string) => void;
+  overlayConditions?: OperatingCondition[];
+  projectorHighContrast?: boolean;
+  showWhiteboardByDefault?: boolean;
 }
 
 // Geometric helpers for anti-collision label layout
@@ -178,13 +245,298 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
   isolatedProcessIds,
   onSetIsolatedProcessInfo,
   onDeletePoint,
+  onToggleHidePoint,
   onDeleteProcess,
   onDuplicatePoint,
   onLocateModuleInAhu,
   onToggleLayer,
+  labelDisplayMode: propLabelDisplayMode,
+  onChangeLabelDisplayMode,
   isSplitView = false,
+  teachingMode = false,
+  teachingGuidePointId = null,
+  teachingGuideParam = null,
+  teachingMixtureInfo = null,
+  isPanZoomLocked: propPanZoomLocked,
+  onTogglePanZoomLock,
+  onUpdatePoint,
+  onToggleFixParam,
+  onClearFixedParams,
+  overlayConditions = [],
+  projectorHighContrast = false,
+  showWhiteboardByDefault = false,
 }) => {
+  const chartContainerRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
+
+  // Whiteboard Annotations PDI state
+  const [showWhiteboard, setShowWhiteboard] = useState<boolean>(showWhiteboardByDefault);
+
+  // Handlers for fixing/pinning psychrometric parameters on points
+  const handleTogglePointFixParam = useCallback(
+    (pointId: string, param: PsychroParamKey) => {
+      if (onToggleFixParam) {
+        onToggleFixParam(pointId, param);
+        return;
+      }
+      const pt = points.find((p) => p.id === pointId);
+      if (!pt) return;
+      const currentFixed = pt.fixedParams || [];
+      const isAlreadyFixed = currentFixed.includes(param);
+      let nextFixed: PsychroParamKey[];
+      const nextValues = { ...(pt.fixedValues || {}) };
+      if (isAlreadyFixed) {
+        nextFixed = currentFixed.filter((k) => k !== param);
+        delete nextValues[param];
+      } else {
+        if (currentFixed.length >= 2) {
+          delete nextValues[currentFixed[0]];
+          nextFixed = [currentFixed[1], param];
+        } else {
+          nextFixed = [...currentFixed, param];
+        }
+        nextValues[param] = param === 'w' ? pt.w : (pt as any)[param];
+      }
+      const updated: StatePoint = {
+        ...pt,
+        fixedParams: nextFixed,
+        fixedValues: nextValues,
+        isLocked: nextFixed.length >= 2,
+      };
+      if (onUpdatePoint) {
+        onUpdatePoint(updated);
+      }
+    },
+    [points, onToggleFixParam, onUpdatePoint]
+  );
+
+  const handleClearPointFixedParams = useCallback(
+    (pointId: string) => {
+      if (onClearFixedParams) {
+        onClearFixedParams(pointId);
+        return;
+      }
+      const pt = points.find((p) => p.id === pointId);
+      if (!pt) return;
+      const updated: StatePoint = {
+        ...pt,
+        fixedParams: [],
+        fixedValues: {},
+        isLocked: false,
+      };
+      if (onUpdatePoint) {
+        onUpdatePoint(updated);
+      }
+    },
+    [points, onClearFixedParams, onUpdatePoint]
+  );
+
+  const handleCommitParamValue = useCallback(
+    (pointId: string, param: PsychroParamKey, val: number) => {
+      const pt = points.find((p) => p.id === pointId);
+      if (!pt) return;
+      const solved = solveConstrainedStatePoint(pt, param, val, pressure);
+      if (onUpdatePoint) {
+        onUpdatePoint(solved);
+      } else {
+        onUpdatePointCoordinates(pointId, solved.tdb, solved.w);
+      }
+    },
+    [points, pressure, onUpdatePoint, onUpdatePointCoordinates]
+  );
+
+  // Lock Zoom & Pan State (Especial para pantallas táctiles: fija la vista para mover puntos sin desplazar el diagrama)
+  const [internalPanZoomLocked, setInternalPanZoomLocked] = useState(false);
+  const isPanZoomLocked = propPanZoomLocked !== undefined ? propPanZoomLocked : internalPanZoomLocked;
+  const togglePanZoomLocked = useCallback(() => {
+    if (onTogglePanZoomLock) {
+      onTogglePanZoomLock();
+    } else {
+      setInternalPanZoomLocked((prev) => !prev);
+    }
+  }, [onTogglePanZoomLock]);
+
+  const isPanZoomLockedRef = useRef(isPanZoomLocked);
+  useEffect(() => {
+    isPanZoomLockedRef.current = isPanZoomLocked;
+  }, [isPanZoomLocked]);
+
+  // Label Display Mode: 3 estados:
+  // 1. 'none': No se mostrarán etiquetas
+  // 2. 'basic': Se mostrarán las etiquetas de Tbs y la humedad específica (por defecto)
+  // 3. 'all': Se mostrarán todas las etiquetas
+  const [localLabelDisplayMode, setLocalLabelDisplayMode] = useState<LabelDisplayMode>('basic');
+  const labelMode = propLabelDisplayMode !== undefined ? propLabelDisplayMode : localLabelDisplayMode;
+
+  const handleCycleLabelMode = useCallback(() => {
+    const nextMode: LabelDisplayMode =
+      labelMode === 'basic' ? 'all' : labelMode === 'all' ? 'none' : 'basic';
+    if (onChangeLabelDisplayMode) {
+      onChangeLabelDisplayMode(nextMode);
+    } else {
+      setLocalLabelDisplayMode(nextMode);
+    }
+  }, [labelMode, onChangeLabelDisplayMode]);
+
+  // Floating Point Window inspector state for selected point (defaults to false to prevent duplicate popups)
+  const [showPointInspector, setShowPointInspector] = useState<boolean>(false);
+
+  // Floating Layers Window state (accessible especially when maximized)
+  const [showLayersWindow, setShowLayersWindow] = useState<boolean>(false);
+
+  // Fullscreen / Maximized diagram mode occupying entire screen (Modo Pantalla Completa PDI)
+  const [isMaximized, setIsMaximized] = useState<boolean>(false);
+
+  // Unified Fullscreen PDI Handler for Psychrometric Chart
+  const handleTogglePdiFullscreen = useCallback(async () => {
+    try {
+      if (!isMaximized) {
+        setIsMaximized(true);
+        if (chartContainerRef.current && !document.fullscreenElement && chartContainerRef.current.requestFullscreen) {
+          await chartContainerRef.current.requestFullscreen().catch(() => {});
+        }
+      } else {
+        setIsMaximized(false);
+        if (document.fullscreenElement && document.exitFullscreen) {
+          await document.exitFullscreen().catch(() => {});
+        }
+      }
+    } catch {
+      // Fallback is purely isMaximized state
+    }
+  }, [isMaximized]);
+
+  // Sync isMaximized state with native browser fullscreen changes
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      if (!document.fullscreenElement && isMaximized) {
+        setIsMaximized(false);
+      }
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, [isMaximized]);
+
+  // Manual Zoom input state & double-click 100% reset
+  const [isEditingZoom, setIsEditingZoom] = useState<boolean>(false);
+  const [zoomInputValue, setZoomInputValue] = useState<string>('');
+  const zoomClickTimerRef = useRef<number | null>(null);
+
+  const handleZoomBadgeClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (zoomClickTimerRef.current !== null) {
+      // Second rapid click -> Double click detected! Reset to 100% zoom
+      window.clearTimeout(zoomClickTimerRef.current);
+      zoomClickTimerRef.current = null;
+      handleSetZoom100();
+    } else {
+      // First click: wait 240ms. If no second click arrives, enter manual edit mode
+      zoomClickTimerRef.current = window.setTimeout(() => {
+        zoomClickTimerRef.current = null;
+        setIsEditingZoom(true);
+        setZoomInputValue(String(Math.round((viewBoxWidth / viewBox.width) * 100)));
+      }, 240);
+    }
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // 1. Escape key handling (minimize or deselect point)
+      if (e.key === 'Escape') {
+        if (isMaximized) {
+          handleTogglePdiFullscreen();
+          return;
+        }
+        if (selectedPointId) {
+          onSelectPoint(null);
+          return;
+        }
+      }
+
+      // 2. Ignore keypresses if user is currently interacting with an input/textarea/select
+      const activeEl = document.activeElement as HTMLElement | null;
+      if (
+        activeEl &&
+        (activeEl.tagName === 'INPUT' ||
+         activeEl.tagName === 'TEXTAREA' ||
+         activeEl.tagName === 'SELECT' ||
+         activeEl.isContentEditable)
+      ) {
+        return;
+      }
+
+      // 3. Arrow Keys: Desplazar punto seleccionado con alta precisión
+      if (
+        selectedPointId &&
+        (e.key === 'ArrowUp' ||
+         e.key === 'ArrowDown' ||
+         e.key === 'ArrowLeft' ||
+         e.key === 'ArrowRight')
+      ) {
+        const selectedPt = points.find((p) => p.id === selectedPointId);
+        if (!selectedPt) return;
+
+        // Prevent page scrolling with arrow keys while fine-tuning point
+        e.preventDefault();
+
+        // Incrementos según modificador:
+        // Normal: 0.1 °C / 0.1 g/kg (0.0001 kg/kg)
+        // Shift: 0.5 °C / 0.5 g/kg (0.0005 kg/kg)
+        // Alt / Ctrl / Meta: 0.01 °C / 0.01 g/kg (0.00001 kg/kg - ultra precisión)
+        const isCoarse = e.shiftKey;
+        const isFine = e.altKey || e.ctrlKey || e.metaKey;
+
+        const stepTdb = isFine ? 0.01 : isCoarse ? 0.5 : 0.1;
+        const stepW = isFine ? 0.00001 : isCoarse ? 0.0005 : 0.0001; // en kg/kg
+
+        let deltaTdb = 0;
+        let deltaW = 0;
+
+        if (chartType === 'carrier') {
+          // Carrier: eje horizontal es Tbs, eje vertical es w
+          if (e.key === 'ArrowRight') deltaTdb = stepTdb;
+          else if (e.key === 'ArrowLeft') deltaTdb = -stepTdb;
+          else if (e.key === 'ArrowUp') deltaW = stepW;
+          else if (e.key === 'ArrowDown') deltaW = -stepW;
+        } else {
+          // Mollier: eje horizontal es w, eje vertical es Tbs
+          if (e.key === 'ArrowRight') deltaW = stepW;
+          else if (e.key === 'ArrowLeft') deltaW = -stepW;
+          else if (e.key === 'ArrowUp') deltaTdb = stepTdb;
+          else if (e.key === 'ArrowDown') deltaTdb = -stepTdb;
+        }
+
+        const newTdb = Number((selectedPt.tdb + deltaTdb).toFixed(2));
+        const newW = Number(Math.max(0, selectedPt.w + deltaW).toFixed(5));
+
+        const clampedTdb = Math.max(DEFAULT_BOUNDS.tdbMin, Math.min(DEFAULT_BOUNDS.tdbMax, newTdb));
+        const clampedW = Math.max(0, Math.min(DEFAULT_BOUNDS.wMax, newW));
+
+        onUpdatePointCoordinates(selectedPt.id, clampedTdb, clampedW);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [
+    isMaximized,
+    handleTogglePdiFullscreen,
+    selectedPointId,
+    points,
+    chartType,
+    onSelectPoint,
+    onUpdatePointCoordinates,
+  ]);
+
+  // Precomputed polyline strings for the 100% Saturation / Línea de Rocío
+  const carrierSatPolylineStr = useMemo(
+    () => CARRIER_SAT_PTS.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' '),
+    []
+  );
+  const mollierSatPolylineStr = useMemo(
+    () => MOLLIER_SAT_PTS.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' '),
+    []
+  );
 
   // SVG Canvas dimensions tightly tailored to fill window
   const viewBoxWidth = 902;
@@ -246,7 +598,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
 
   // Official Chart Theme: 'ashrae_classic' (Canonical Green on technical paper), 'valcon_color' (Polychrome), or 'dark_blueprint' (CAD)
   const [chartTheme, setChartTheme] = useState<'ashrae_classic' | 'valcon_color' | 'dark_blueprint'>('ashrae_classic');
-  const [localShowProtractor, setLocalShowProtractor] = useState<boolean>(true);
+  const [localShowProtractor, setLocalShowProtractor] = useState<boolean>(false);
   const showProtractor = layers.shrProtractor !== undefined ? layers.shrProtractor : localShowProtractor;
 
   const handleToggleProtractor = useCallback(() => {
@@ -324,15 +676,17 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
   } | null>(null);
 
   // Coordinate mapping: Tdb, W -> SVG X, Y (Carrier Chart)
+  // Accounts for the official Carrier slanted dry-bulb isotherms matching FlyCarpetCarrierDiagram
   const coordToPixelCarrier = useCallback(
     (tdb: number, w: number): [number, number] => {
-      const px =
-        margin.left +
-        ((tdb - bounds.tdbMin) / (bounds.tdbMax - bounds.tdbMin)) * plotWidth;
       const py =
         margin.top +
         plotHeight -
         ((w - bounds.wMin) / (bounds.wMax - bounds.wMin)) * plotHeight;
+      const xBase =
+        margin.left +
+        ((tdb - bounds.tdbMin) / (bounds.tdbMax - bounds.tdbMin)) * plotWidth;
+      const px = xBase - (bounds.tdbMax - tdb) * 22.77777777777778 * w;
       return [px, py];
     },
     [bounds, margin.left, margin.top, plotWidth, plotHeight]
@@ -341,12 +695,13 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
   // Inverse Coordinate mapping: SVG X, Y -> Tdb, W (Carrier Chart)
   const pixelToCoordCarrier = useCallback(
     (px: number, py: number): [number, number] => {
-      const tdb =
-        bounds.tdbMin +
-        ((px - margin.left) / plotWidth) * (bounds.tdbMax - bounds.tdbMin);
-      const w =
+      const w = Math.max(
+        0,
         bounds.wMin +
-        ((margin.top + plotHeight - py) / plotHeight) * (bounds.wMax - bounds.wMin);
+          ((margin.top + plotHeight - py) / plotHeight) * (bounds.wMax - bounds.wMin)
+      );
+      const k = 22.77777777777778 * w;
+      const tdb = (px - 196.5 + bounds.tdbMax * k) / (12.65 + k);
       return [tdb, w];
     },
     [bounds, margin.left, margin.top, plotWidth, plotHeight]
@@ -402,9 +757,19 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
 
   // ---------------- UNIFIED ZOOM, PAN & FIT OPERATIONS (CONTAINER + CONTENTS) ----------------
   const handleZoomIn = () => {
+    if (isPanZoomLocked) return;
     setViewBox((prev) => {
       const newWidth = Math.max(120, prev.width * 0.8);
       const newHeight = (newWidth / viewBoxWidth) * viewBoxHeight;
+      const zoomPercent = (viewBoxWidth / newWidth) * 100;
+      if (Math.abs(zoomPercent - 100) < 3) {
+        return {
+          x: 0,
+          y: 0,
+          width: viewBoxWidth,
+          height: viewBoxHeight,
+        };
+      }
       return {
         x: prev.x + (prev.width - newWidth) / 2,
         y: prev.y + (prev.height - newHeight) / 2,
@@ -415,9 +780,19 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
   };
 
   const handleZoomOut = () => {
+    if (isPanZoomLocked) return;
     setViewBox((prev) => {
       const newWidth = Math.min(3600, prev.width * 1.25);
       const newHeight = (newWidth / viewBoxWidth) * viewBoxHeight;
+      const zoomPercent = (viewBoxWidth / newWidth) * 100;
+      if (Math.abs(zoomPercent - 100) < 3) {
+        return {
+          x: 0,
+          y: 0,
+          width: viewBoxWidth,
+          height: viewBoxHeight,
+        };
+      }
       return {
         x: prev.x + (prev.width - newWidth) / 2,
         y: prev.y + (prev.height - newHeight) / 2,
@@ -427,67 +802,60 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
     });
   };
 
-  const handleZoomAll = () => {
-    if (points.length === 0) {
-      setViewBox(DEFAULT_VIEWBOX);
-      return;
-    }
-    const pixelCoords = points.map((p) => coordToPixel(p.tdb, p.w));
-    const xs = pixelCoords.map(([x]) => x);
-    const ys = pixelCoords.map(([, y]) => y);
-    const minX = Math.min(...xs);
-    const maxX = Math.max(...xs);
-    const minY = Math.min(...ys);
-    const maxY = Math.max(...ys);
-
-    // Give comfortable margins around the points, including space for point labels
-    const paddingX = Math.max(90, (maxX - minX) * 0.35);
-    const paddingY = Math.max(70, (maxY - minY) * 0.35);
-
-    const fitWidth = Math.max(380, (maxX - minX) + paddingX * 2);
-    const fitHeight = Math.max(260, (maxY - minY) + paddingY * 2);
-
-    const targetRatio = viewBoxWidth / viewBoxHeight;
-    let finalWidth = fitWidth;
-    let finalHeight = fitHeight;
-
-    if (fitWidth / fitHeight > targetRatio) {
-      finalHeight = fitWidth / targetRatio;
-    } else {
-      finalWidth = fitHeight * targetRatio;
-    }
-
-    const centerX = (minX + maxX) / 2;
-    const centerY = (minY + maxY) / 2;
-
+  const handleSetZoom100 = useCallback(() => {
     setViewBox({
-      x: centerX - finalWidth / 2,
-      y: centerY - finalHeight / 2,
-      width: finalWidth,
-      height: finalHeight,
+      x: 0,
+      y: 0,
+      width: viewBoxWidth,
+      height: viewBoxHeight,
     });
-  };
+  }, [viewBoxWidth, viewBoxHeight]);
 
-  const handleCenterCycle = () => {
-    if (points.length === 0) {
-      setViewBox(DEFAULT_VIEWBOX);
+  const handleSetZoom = useCallback((targetPercent: number) => {
+    const clamped = Math.max(20, Math.min(600, targetPercent));
+    if (Math.abs(clamped - 100) < 0.1) {
+      handleSetZoom100();
       return;
     }
-    const pixelCoords = points.map((p) => coordToPixel(p.tdb, p.w));
-    const xs = pixelCoords.map(([x]) => x);
-    const ys = pixelCoords.map(([, y]) => y);
-    const centerX = (Math.min(...xs) + Math.max(...xs)) / 2;
-    const centerY = (Math.min(...ys) + Math.max(...ys)) / 2;
+    const factor = clamped / 100;
+    const newWidth = viewBoxWidth / factor;
+    const newHeight = (newWidth / viewBoxWidth) * viewBoxHeight;
+    setViewBox((prev) => {
+      const centerX = prev.x + prev.width / 2;
+      const centerY = prev.y + prev.height / 2;
+      return {
+        x: centerX - newWidth / 2,
+        y: centerY - newHeight / 2,
+        width: newWidth,
+        height: newHeight,
+      };
+    });
+  }, [viewBoxWidth, viewBoxHeight, handleSetZoom100]);
 
-    setViewBox((prev) => ({
-      ...prev,
-      x: centerX - prev.width / 2,
-      y: centerY - prev.height / 2,
-    }));
-  };
+  // Centrar el diagrama psicrométrico en la pantalla
+  const handleCenterDiagram = useCallback(() => {
+    setViewBox((prev) => {
+      // Si el ancho está en el 100% (o prácticamente 100%), centrar en origen exacto
+      if (Math.abs(prev.width - viewBoxWidth) < 2) {
+        return {
+          x: 0,
+          y: 0,
+          width: viewBoxWidth,
+          height: viewBoxHeight,
+        };
+      }
+      return {
+        ...prev,
+        x: (viewBoxWidth - prev.width) / 2,
+        y: (viewBoxHeight - prev.height) / 2,
+      };
+    });
+  }, [viewBoxWidth, viewBoxHeight]);
+
+  const handleCenterCycle = handleCenterDiagram;
 
   const handleResetBounds = () => {
-    setViewBox(DEFAULT_VIEWBOX);
+    handleSetZoom100();
   };
 
   // Center diagram on a single state point with focused zoom
@@ -523,9 +891,9 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
     });
   }, [coordToPixel, viewBoxWidth, viewBoxHeight]);
 
-  // Mathematically exact SVG cursor coordinate resolution via SVG CTM (accounts for viewBox, preserveAspectRatio letterboxing and DPI)
+  // Mathematically exact SVG cursor coordinate resolution via SVG CTM (accounts for viewBox, preserveAspectRatio letterboxing, touches, and DPI)
   const getSvgCursorPoint = useCallback(
-    (e: React.MouseEvent | MouseEvent | React.WheelEvent): { x: number; y: number } => {
+    (e: React.MouseEvent | MouseEvent | React.WheelEvent | { clientX: number; clientY: number }): { x: number; y: number } => {
       if (!svgRef.current) return { x: 0, y: 0 };
       const svg = svgRef.current;
       const ctm = svg.getScreenCTM();
@@ -556,6 +924,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
     if (!svg) return;
 
     const onWheelNative = (e: WheelEvent) => {
+      if (isPanZoomLockedRef.current) return;
       e.preventDefault();
       e.stopPropagation();
 
@@ -568,6 +937,17 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
       setViewBox((prev) => {
         const newWidth = Math.max(120, Math.min(3600, prev.width * factor));
         const newHeight = (newWidth / viewBoxWidth) * viewBoxHeight;
+
+        // Si el zoom resultante queda muy cerca del 100% (entre 97% y 103%), encajar al 100% y centrar exactamente
+        const zoomPercent = (viewBoxWidth / newWidth) * 100;
+        if (Math.abs(zoomPercent - 100) < 3) {
+          return {
+            x: 0,
+            y: 0,
+            width: viewBoxWidth,
+            height: viewBoxHeight,
+          };
+        }
 
         const mouseRatioX = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
         const mouseRatioY = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
@@ -591,7 +971,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
   }, [viewBoxWidth, viewBoxHeight]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
-    if (draggedPointId) return;
+    if (draggedPointId || isPanZoomLocked) return;
     if (e.button !== 0) return;
     if ((e.target as HTMLElement).closest('button')) return;
     setIsPanning(true);
@@ -608,8 +988,32 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
     const { x: rawPx, y: rawPy } = getSvgCursorPoint(e);
 
     if (draggedPointId) {
-      const [tdb, w] = pixelToCoord(rawPx, rawPy);
-      onUpdatePointCoordinates(draggedPointId, tdb, Math.max(0, w));
+      const pt = points.find((p) => p.id === draggedPointId);
+      if (pt) {
+        if (pt.isLocked || (pt.fixedParams && pt.fixedParams.length >= 2)) {
+          return;
+        }
+        let [targetTdb, targetW] = pixelToCoord(rawPx, rawPy);
+        const ws = getSaturationHumidityRatio(targetTdb, pressure);
+
+        if (pt.fixedParams?.includes('w')) {
+          targetW = pt.fixedValues?.w ?? pt.w;
+        } else if (pt.fixedParams?.includes('tdb')) {
+          targetTdb = pt.fixedValues?.tdb ?? pt.tdb;
+        } else if (pt.fixedParams?.includes('rh')) {
+          const fixedRh = pt.fixedValues?.rh ?? pt.rh;
+          targetW = getWFromTdbRh(targetTdb, fixedRh, pressure);
+        } else if (pt.fixedParams?.includes('h')) {
+          const fixedH = pt.fixedValues?.h ?? pt.h;
+          targetW = getWFromEnthalpy(targetTdb, fixedH);
+        } else if (pt.fixedParams?.includes('twb')) {
+          const fixedTwb = pt.fixedValues?.twb ?? pt.twb;
+          targetW = getWFromTdbTwb(targetTdb, Math.min(targetTdb, fixedTwb), pressure);
+        }
+
+        targetW = Math.max(0.0001, Math.min(ws, targetW));
+        onUpdatePointCoordinates(draggedPointId, targetTdb, targetW);
+      }
       return;
     }
 
@@ -637,29 +1041,35 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
     if (showProtractor && !isPanning && !draggedPointId) {
       if (chartType === 'carrier') {
         const d = Math.hypot(rawPx - 194.6, rawPy - 75.6);
-        if (d >= 10 && d <= 125 && rawPy >= 65) {
+        if (d >= 8 && d <= 130 && rawPy >= 65) {
           const dx = rawPx - 194.6;
           const dy = rawPy - 75.6;
-          let shrVal: number;
-          if (dx <= 0) {
-            const alpha = Math.atan2(dy, -dx);
-            shrVal = Math.max(0, Math.min(1.0, 1 / (1 + Math.tan(alpha) / 0.5723)));
+          if (dx <= 2 && dy >= -2) {
+            const alpha = Math.atan2(Math.max(0, dy), Math.max(0.0001, -dx));
+            const calculatedSHR = getCarrierSHRFromAngle(alpha, plotWidth, plotHeight, 60, 0.030);
+            const matchedTick = ASHRAE_SHR_VALUES.find((t) => Math.abs(t.shr - calculatedSHR) < 0.018);
+            const finalSHR = matchedTick ? matchedTick.shr : Number(calculatedSHR.toFixed(2));
+            setHoveredProtractorSHR(finalSHR);
           } else {
-            const beta = Math.atan2(dy, dx);
-            shrVal = 1 / (1 - Math.tan(beta) / 0.5723);
+            setHoveredProtractorSHR(null);
           }
-          setHoveredProtractorSHR(Number(shrVal.toFixed(2)));
         } else {
           setHoveredProtractorSHR(null);
         }
       } else {
         const d = Math.hypot(rawPx - 794.0, rawPy - 480.7);
-        if (d >= 10 && d <= 95 && rawPx <= 800) {
+        if (d >= 8 && d <= 95) {
           const dx = 794.0 - rawPx;
           const dy = rawPy - 480.7;
-          const gamma = Math.atan2(dy, dx);
-          const shrVal = Math.max(0, Math.min(1.0, Math.tan(gamma) / (1.27 + Math.tan(gamma))));
-          setHoveredProtractorSHR(Number(shrVal.toFixed(2)));
+          if (dx >= -2 && dy >= -2) {
+            const gamma = Math.atan2(Math.max(0, dy), Math.max(0.0001, dx));
+            const calculatedSHR = getMollierSHRFromAngle(gamma, plotWidth, plotHeight, 60, 0.030);
+            const matchedTick = MOLLIER_SHR_VALUES.find((t) => Math.abs(t.shr - calculatedSHR) < 0.018);
+            const finalSHR = matchedTick ? matchedTick.shr : Number(calculatedSHR.toFixed(2));
+            setHoveredProtractorSHR(finalSHR);
+          } else {
+            setHoveredProtractorSHR(null);
+          }
         } else {
           setHoveredProtractorSHR(null);
         }
@@ -709,7 +1119,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
     setDraggedPointId(null);
   };
 
-  // Touch gesture support: 1-finger pan and 2-finger pinch-to-zoom
+  // Touch gesture support: 1-finger pan/point-drag and 2-finger pinch-to-zoom
   const chartTouchStartRef = useRef<{
     touches: { x: number; y: number }[];
     distance: number;
@@ -722,6 +1132,13 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
 
   const handleTouchStart = (e: React.TouchEvent) => {
     if ((e.target as HTMLElement).closest('button')) return;
+    // Si el toque se inicia sobre un punto o su zona de arrastre, dejar que el punto lo gestione
+    if (Boolean((e.target as Element).closest('[data-point-id]'))) return;
+
+    if (isPanZoomLocked) {
+      setIsPanning(false);
+      return;
+    }
 
     if (e.touches.length === 1) {
       const t = e.touches[0];
@@ -749,6 +1166,43 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
 
   const handleTouchMove = (e: React.TouchEvent) => {
     if (!svgRef.current) return;
+
+    // 1. Arrastre de puntos en pantalla táctil (siempre activo, incluso si zoom/pan están bloqueados)
+    if (draggedPointId && e.touches.length >= 1) {
+      if (e.cancelable) e.preventDefault();
+      const t = e.touches[0];
+      const { x: rawPx, y: rawPy } = getSvgCursorPoint(t);
+      const pt = points.find((p) => p.id === draggedPointId);
+      if (pt) {
+        if (pt.isLocked || (pt.fixedParams && pt.fixedParams.length >= 2)) {
+          return;
+        }
+        let [targetTdb, targetW] = pixelToCoord(rawPx, rawPy);
+        const ws = getSaturationHumidityRatio(targetTdb, pressure);
+
+        if (pt.fixedParams?.includes('w')) {
+          targetW = pt.fixedValues?.w ?? pt.w;
+        } else if (pt.fixedParams?.includes('tdb')) {
+          targetTdb = pt.fixedValues?.tdb ?? pt.tdb;
+        } else if (pt.fixedParams?.includes('rh')) {
+          const fixedRh = pt.fixedValues?.rh ?? pt.rh;
+          targetW = getWFromTdbRh(targetTdb, fixedRh, pressure);
+        } else if (pt.fixedParams?.includes('h')) {
+          const fixedH = pt.fixedValues?.h ?? pt.h;
+          targetW = getWFromEnthalpy(targetTdb, fixedH);
+        } else if (pt.fixedParams?.includes('twb')) {
+          const fixedTwb = pt.fixedValues?.twb ?? pt.twb;
+          targetW = getWFromTdbTwb(targetTdb, Math.min(targetTdb, fixedTwb), pressure);
+        }
+
+        targetW = Math.max(0.0001, Math.min(ws, targetW));
+        onUpdatePointCoordinates(draggedPointId, targetTdb, targetW);
+      }
+      return;
+    }
+
+    // 2. Si el zoom y paneo están bloqueados, no desplazar ni cambiar tamaño del diagrama
+    if (isPanZoomLocked) return;
 
     if (e.touches.length === 1 && isPanning) {
       const t = e.touches[0];
@@ -1009,9 +1463,9 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
     }
 
     // Comfort Polygons
-    const buildComfortPoly = (ptsList: Array<{ tdb: number; rh: number }>) => {
+    const buildComfortPoly = (ptsList: Array<{ tdb: number; rh?: number; w?: number }>) => {
       const pts = ptsList.map((p) => {
-        const w = getWFromTdbRh(p.tdb, p.rh, pressure);
+        const w = p.w !== undefined ? p.w : getWFromTdbRh(p.tdb, p.rh ?? 50, pressure);
         return coordToPixel(p.tdb, Math.min(bounds.wMax, Math.max(bounds.wMin, w)));
       });
       return pts.map((p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
@@ -1047,7 +1501,8 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
 
   // Technical Theme Styling Definition
   const themeStyles = useMemo(() => {
-    if (chartTheme === 'ashrae_classic') {
+    const activeTheme = projectorHighContrast ? 'valcon_color' : chartTheme;
+    if (activeTheme === 'ashrae_classic') {
       return {
         canvasBg: '#FEFEFA',
         plotBg: '#FAF9F4',
@@ -1079,7 +1534,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
         hudText: '#14532D',
         isDark: false,
       };
-    } else if (chartTheme === 'valcon_color') {
+    } else if (activeTheme === 'valcon_color') {
       return {
         canvasBg: '#FFFFFF',
         plotBg: '#F8FAFC',
@@ -1145,7 +1600,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
         isDark: true,
       };
     }
-  }, [chartTheme]);
+  }, [chartTheme, projectorHighContrast]);
 
   // Enthalpy Deviation Curves (curvas de desviación entálpica)
   const enthalpyDeviations = useMemo(() => {
@@ -1348,8 +1803,10 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
       if (!p) return;
       const [px, py] = p;
 
-      const width = Math.max(48, pt.name.length * 7.5 + 18);
-      const height = 20;
+      // Clean, compact point designation on chart canvas (e.g. P1, P2, E, R, M) as requested by user
+      const labelText = getPointDesignation(pt.name);
+      const width = Math.max(28, labelText.length * 8 + 18);
+      const height = 18;
 
       // 8 radial directions (angles in radians)
       const angles = [
@@ -1493,60 +1950,40 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
 
   return (
     <div
-      className="relative w-full h-full flex flex-col select-none overflow-hidden rounded-xl border transition-colors"
+      ref={chartContainerRef}
+      className={`relative w-full h-full flex flex-col select-none overflow-hidden rounded-xl border transition-all ${
+        isMaximized ? 'fixed inset-0 z-50 w-screen h-screen rounded-none border-0' : ''
+      }`}
       style={{
         backgroundColor: themeStyles.canvasBg,
         borderColor: themeStyles.frameStroke,
       }}
     >
+      {/* Floating Exit Maximize Button when diagram is maximized in PDI Fullscreen */}
+      {isMaximized && (
+        <button
+          type="button"
+          onClick={handleTogglePdiFullscreen}
+          className="absolute top-2.5 right-3 z-50 bg-black/85 hover:bg-amber-400 hover:text-black text-amber-300 px-3.5 py-1.5 rounded-lg border border-amber-400/50 shadow-2xl flex items-center gap-2 text-xs font-bold transition-all cursor-pointer select-none"
+          title="Salir de Pantalla Completa PDI (Esc)"
+        >
+          <Minimize2 className="w-4 h-4" />
+          <span>Salir PDI (Esc)</span>
+        </button>
+      )}
+
       {/* Top Floating Glassmorphism Controls Toolbar */}
-      <div className="absolute top-2 left-3 z-20 flex flex-wrap items-center gap-1.5 bg-[#0a0a0c]/90 backdrop-blur-md px-3 py-1.5 rounded-xl border border-[rgba(255,255,255,0.15)] text-xs shadow-2xl">
-        <span className="text-white font-primary font-bold text-xs">
-          {chartType === 'carrier' ? 'Diagrama Carrier (ASHRAE)' : 'Diagrama Mollier (h-x)'}
-        </span>
-        <span className="text-slate-600">|</span>
-        <span className="font-mono text-[#fbbf24] font-semibold">P = {pressure.toFixed(1)} kPa</span>
-
-        <div className="h-4 w-[1px] bg-slate-700 mx-0.5" />
-
-        {/* Technical Theme Switcher */}
-        <div className="flex items-center gap-1 bg-[#1a1a1c] p-0.5 rounded-[6px] border border-[rgba(255,255,255,0.1)]">
-          <button
-            onClick={() => setChartTheme('ashrae_classic')}
-            className={`px-2 py-0.5 rounded-[4px] text-[11px] font-semibold transition-all ${
-              chartTheme === 'ashrae_classic'
-                ? 'bg-[#15803D] text-white shadow-sm'
-                : 'text-[#94a3b8] hover:text-white'
-            }`}
-            title="Carta Oficial ASHRAE Nº 1 (Papel Técnico / Verde Canónico)"
-          >
-            ASHRAE Oficial
-          </button>
-          <button
-            onClick={() => setChartTheme('valcon_color')}
-            className={`px-2 py-0.5 rounded-[4px] text-[11px] font-semibold transition-all ${
-              chartTheme === 'valcon_color'
-                ? 'bg-[#0284C7] text-white shadow-sm'
-                : 'text-[#94a3b8] hover:text-white'
-            }`}
-            title="Carta Valcon (Polícromo Técnico)"
-          >
-            Valcon
-          </button>
-          <button
-            onClick={() => setChartTheme('dark_blueprint')}
-            className={`px-2 py-0.5 rounded-[4px] text-[11px] font-semibold transition-all ${
-              chartTheme === 'dark_blueprint'
-                ? 'bg-[#334155] text-white shadow-sm'
-                : 'text-[#94a3b8] hover:text-white'
-            }`}
-            title="Blueprint CAD (Modo Oscuro)"
-          >
-            CAD
-          </button>
-        </div>
-
-        <div className="h-4 w-[1px] bg-slate-700 mx-0.5" />
+      <div className="absolute top-2 left-3 z-50 flex flex-wrap items-center gap-1.5 bg-[#0a0a0c]/90 backdrop-blur-md px-3 py-1.5 rounded-xl border border-[rgba(255,255,255,0.15)] text-xs shadow-2xl">
+        {!teachingMode && (
+          <>
+            <span className="text-white font-primary font-bold text-xs">
+              {chartType === 'carrier' ? 'Diagrama Carrier (ASHRAE)' : 'Diagrama Mollier (h-x)'}
+            </span>
+            <span className="text-slate-600">|</span>
+            <span className="font-mono text-[#fbbf24] font-semibold">P = {pressure.toFixed(1)} kPa</span>
+            <div className="h-4 w-[1px] bg-slate-700 mx-0.5" />
+          </>
+        )}
 
         {/* ASHRAE Protractor Toggle */}
         <button
@@ -1563,112 +2000,276 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
         </button>
 
         {/* Active SHR Indicator & Quick Presets */}
-        {showProtractor && (
-          <div className="flex items-center gap-1 px-2 py-0.5 rounded-[6px] bg-amber-950/40 border border-amber-800/40 text-amber-300 text-xs font-mono animate-fadeIn">
-            <span className="font-semibold text-amber-400 text-[11px]">
-              {selectedSHR !== null ? `SHR: ${selectedSHR.toFixed(2)}` : 'FCS/SHR:'}
-            </span>
-            <div className="flex items-center gap-0.5">
-              {[0.65, 0.70, 0.75, 0.80, 0.85, 1.00].map((preset) => (
+        {showProtractor && (() => {
+          const refPt = getAshraeReferencePoint(pressure);
+          const targetPt = selectedPointId
+            ? points.find((p) => p.id === selectedPointId) || { id: 'ref', name: 'Punto Ref. ASHRAE (24°C / 50%)', tdb: refPt.tdb, w: refPt.w }
+            : { id: 'ref', name: 'Punto Ref. ASHRAE (24°C / 50%)', tdb: refPt.tdb, w: refPt.w };
+          const toolbarAdp = activeSHR !== null && activeSHR > 0 && activeSHR <= 1.0
+            ? calculateADP(targetPt.tdb, targetPt.w, activeSHR, pressure)
+            : null;
+
+          return (
+            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-[6px] bg-amber-950/40 border border-amber-800/40 text-amber-300 text-xs font-mono animate-fadeIn">
+              <span className="font-semibold text-amber-400 text-[11px]">
+                {activeSHR !== null ? `SHR: ${activeSHR.toFixed(2)}` : 'FCS/SHR:'}
+              </span>
+              <div className="flex items-center gap-0.5">
+                {[0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 1.00].map((preset) => (
+                  <button
+                    key={preset}
+                    onClick={() => setSelectedSHR((prev) => (prev === preset ? null : preset))}
+                    className={`px-1 py-0.2 text-[10px] font-semibold rounded transition-colors ${
+                      selectedSHR === preset
+                        ? 'bg-amber-400 text-slate-950 font-bold shadow'
+                        : 'hover:bg-amber-900/60 text-amber-200/90'
+                    }`}
+                    title={`Fijar recta de maniobra con SHR = ${preset.toFixed(2)}`}
+                  >
+                    {preset === 1 ? '1.0' : preset.toFixed(2).replace('0.', '.')}
+                  </button>
+                ))}
+              </div>
+              {toolbarAdp && (
+                <span className="hidden lg:inline text-[10px] text-amber-300/90 bg-amber-900/30 px-1.5 py-0.5 rounded border border-amber-700/30">
+                  ADP: {toolbarAdp.tdbAdp.toFixed(1)}°C
+                </span>
+              )}
+              {selectedSHR !== null && (
                 <button
-                  key={preset}
-                  onClick={() => setSelectedSHR((prev) => (prev === preset ? null : preset))}
-                  className={`px-1 py-0.2 text-[10px] font-semibold rounded transition-colors ${
-                    selectedSHR === preset
-                      ? 'bg-amber-400 text-slate-950 font-bold shadow'
-                      : 'hover:bg-amber-900/60 text-amber-200/90'
-                  }`}
-                  title={`Fijar recta de maniobra con SHR = ${preset.toFixed(2)}`}
+                  onClick={() => setSelectedSHR(null)}
+                  className="text-amber-400 hover:text-white ml-0.5 p-0.5 rounded hover:bg-amber-900/60 transition-colors"
+                  title="Borrar selección de SHR"
                 >
-                  {preset === 1 ? '1.0' : preset.toFixed(2).replace('0.', '.')}
+                  ✕
                 </button>
-              ))}
+              )}
             </div>
-            {selectedSHR !== null && (
-              <button
-                onClick={() => setSelectedSHR(null)}
-                className="text-amber-400 hover:text-white ml-0.5 p-0.5 rounded hover:bg-amber-900/60 transition-colors"
-                title="Borrar recta de maniobra SHR"
-              >
-                ✕
-              </button>
-            )}
-          </div>
-        )}
-
-        {/* Enthalpy Deviations Toggle */}
-        <button
-          onClick={() => setShowEnthalpyDeviations((prev) => !prev)}
-          className={`flex items-center gap-1 px-2 py-0.5 rounded-[6px] text-xs font-semibold transition-all ${
-            showEnthalpyDeviations
-              ? 'bg-[#d97706]/25 text-[#fbbf24] border border-[#d97706]/50'
-              : 'text-[#94a3b8] hover:text-white hover:bg-white/10'
-          }`}
-          title="Curvas de Desviación de Entalpía (Enthalpy Deviation Curves)"
-        >
-          <Activity className="w-3.5 h-3.5" />
-          <span className={isSplitView ? 'hidden' : 'hidden xl:inline'}>Desv. Δh</span>
-        </button>
-
-        <div className="h-4 w-[1px] bg-slate-700 mx-0.5" />
+          );
+        })()}
 
         {/* Zoom Out */}
         <button
           onClick={handleZoomOut}
-          className="p-1 rounded text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
+          className="p-1 rounded text-slate-300 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
           title="Alejar (Zoom Out)"
         >
           <ZoomOut className="w-3.5 h-3.5" />
         </button>
 
-        <span className="text-[10px] font-mono text-slate-300 min-w-[32px] text-center select-none" title="Nivel de zoom">
-          {Math.round((viewBoxWidth / viewBox.width) * 100)}%
-        </span>
+        {/* Manual Zoom Value Input & Double Click 100% Reset */}
+        <div className="flex items-center mx-0.5">
+          {isEditingZoom ? (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const parsed = parseFloat(zoomInputValue);
+                if (!isNaN(parsed) && parsed > 0) {
+                  handleSetZoom(parsed);
+                }
+                setIsEditingZoom(false);
+              }}
+              className="flex items-center"
+            >
+              <input
+                autoFocus
+                type="text"
+                value={zoomInputValue}
+                onChange={(e) => setZoomInputValue(e.target.value)}
+                onBlur={() => {
+                  const parsed = parseFloat(zoomInputValue);
+                  if (!isNaN(parsed) && parsed > 0) {
+                    handleSetZoom(parsed);
+                  }
+                  setIsEditingZoom(false);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    setIsEditingZoom(false);
+                  }
+                }}
+                className="w-11 px-1 py-0.5 text-[11px] font-mono font-bold text-center bg-black border border-amber-400 rounded text-amber-300 focus:outline-none shadow-[0_0_8px_rgba(251,191,36,0.5)]"
+                placeholder="100"
+              />
+              <span className="text-[10px] font-mono text-amber-400 ml-0.5">%</span>
+            </form>
+          ) : (
+            <button
+              type="button"
+              onClick={handleZoomBadgeClick}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                if (zoomClickTimerRef.current !== null) {
+                  window.clearTimeout(zoomClickTimerRef.current);
+                  zoomClickTimerRef.current = null;
+                }
+                handleSetZoom100();
+              }}
+              className="text-[11px] font-mono font-bold text-slate-300 hover:text-amber-300 px-1.5 py-0.5 rounded bg-slate-900/70 hover:bg-slate-800 border border-slate-700/60 hover:border-amber-400/50 min-w-[38px] text-center select-none transition-all cursor-pointer"
+              title="Doble clic rápido para zoom 100% · Clic para escribir zoom manualmente"
+            >
+              {Math.round((viewBoxWidth / viewBox.width) * 100)}%
+            </button>
+          )}
+        </div>
 
         {/* Zoom In */}
         <button
           onClick={handleZoomIn}
-          className="p-1 rounded text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
-          title="Acercar (Zoom In)"
+          disabled={isPanZoomLocked}
+          className={`p-1 rounded transition-colors ${
+            isPanZoomLocked
+              ? 'opacity-40 cursor-not-allowed text-slate-500'
+              : 'text-slate-300 hover:text-white hover:bg-slate-800'
+          }`}
+          title={isPanZoomLocked ? 'Zoom bloqueado' : 'Acercar (Zoom In)'}
         >
           <ZoomIn className="w-3.5 h-3.5" />
         </button>
 
         <div className="h-4 w-[1px] bg-slate-700 mx-0.5" />
 
-        {/* Zoom All / Fit to Active Cycle */}
+        {/* Lock / Unlock Zoom and Pan button */}
         <button
-          onClick={handleZoomAll}
-          className="flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold text-amber-300 bg-amber-950/40 border border-amber-800/40 hover:bg-amber-900/50 hover:text-white transition-colors"
-          title="Ajustar el diagrama al ciclo activo de puntos"
+          type="button"
+          onClick={togglePanZoomLocked}
+          className={`flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-semibold transition-all cursor-pointer ${
+            isPanZoomLocked
+              ? 'bg-amber-400 text-black shadow-[0_0_12px_rgba(251,191,36,0.4)] font-bold ring-1 ring-amber-300'
+              : 'text-slate-300 hover:text-white hover:bg-slate-800 border border-slate-700/60'
+          }`}
+          title={
+            isPanZoomLocked
+              ? 'Zoom y Paneo BLOQUEADOS · Clic para desbloquear (Permite mover puntos con precisión en pantallas táctiles sin desplazar el diagrama)'
+              : 'Bloquear Zoom y Paneo · Fija la vista para mover puntos en pantalla táctil cómodamente sin que el diagrama se mueva'
+          }
         >
-          <Maximize2 className="w-3 h-3 text-amber-400" />
-          <span className={isSplitView ? 'hidden sm:inline' : 'inline'}>Ajustar</span>
+          {isPanZoomLocked ? (
+            <Lock className="w-3.5 h-3.5 text-black" />
+          ) : (
+            <Unlock className="w-3.5 h-3.5 text-slate-400" />
+          )}
+          <span className={isSplitView ? 'hidden sm:inline' : 'inline'}>
+            {isPanZoomLocked ? 'Bloqueado' : 'Bloquear'}
+          </span>
         </button>
 
-        {/* Center Cycle */}
+        {/* Pizarra Digital Interactiva (PDI) Whiteboard Annotation Tools */}
         <button
-          onClick={handleCenterCycle}
-          className="flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold text-cyan-300 bg-cyan-950/40 border border-cyan-800/40 hover:bg-cyan-900/50 hover:text-white transition-colors"
-          title="Centrar el ciclo en la ventana"
+          type="button"
+          onClick={() => setShowWhiteboard((prev) => !prev)}
+          className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded text-xs font-semibold transition-all cursor-pointer ${
+            showWhiteboard
+              ? 'bg-amber-400 text-black shadow-[0_0_12px_rgba(251,191,36,0.4)] font-bold ring-1 ring-amber-300'
+              : 'text-slate-300 hover:text-white hover:bg-slate-800 border border-slate-700/60'
+          }`}
+          title="Herramientas de Pizarra Digital Interactiva (PDI): Rotulador, subrayador, puntero láser y borrador"
         >
-          <Crosshair className="w-3 h-3 text-cyan-400" />
+          <Pen className="w-3.5 h-3.5 text-current" />
+          <span className={isSplitView ? 'hidden sm:inline' : 'inline'}>Pizarra</span>
+        </button>
+
+        <div className="h-4 w-[1px] bg-slate-700 mx-0.5" />
+
+        {/* Center Diagram */}
+        <button
+          onClick={handleCenterDiagram}
+          className="flex items-center gap-1.5 px-2.5 py-0.5 rounded text-xs font-semibold text-cyan-300 bg-cyan-950/40 border border-cyan-800/40 hover:bg-cyan-900/50 hover:text-white transition-colors cursor-pointer"
+          title="Centrar el diagrama psicrométrico en la pantalla"
+        >
+          <Crosshair className="w-3.5 h-3.5 text-cyan-400" />
           <span className={isSplitView ? 'hidden sm:inline' : 'inline'}>Centrar</span>
         </button>
 
         {/* Reset 1:1 Default */}
         <button
           onClick={handleResetBounds}
-          className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-          title="Restablecer diagrama estándar completo (-10°C a 55°C)"
+          className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+          title="Restablecer diagrama estándar al 100% centrado (-10°C a 55°C)"
         >
           <RotateCcw className="w-3.5 h-3.5" />
         </button>
+
+        {/* Toggle Hide/Show Value Labels on Diagram (3 Estados: 1. Sin etiquetas, 2. Tbs y w [por defecto], 3. Todas) */}
+        <button
+          onClick={handleCycleLabelMode}
+          className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded text-xs font-semibold transition-all cursor-pointer ${
+            labelMode === 'basic'
+              ? 'bg-amber-400 text-black shadow font-bold ring-1 ring-amber-300'
+              : labelMode === 'all'
+              ? 'bg-emerald-500 text-black shadow font-bold ring-1 ring-emerald-300'
+              : 'text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-700/60'
+          }`}
+          title={
+            labelMode === 'basic'
+              ? 'Estado 2: Mostrando etiquetas de Tbs y humedad específica (Por defecto) · Clic para mostrar todas las etiquetas'
+              : labelMode === 'all'
+              ? 'Estado 3: Mostrando todas las etiquetas de propiedades · Clic para ocultar etiquetas'
+              : 'Estado 1: Etiquetas ocultadas · Clic para mostrar etiquetas de Tbs y w'
+          }
+        >
+          {labelMode === 'none' ? (
+            <EyeOff className="w-3.5 h-3.5 text-slate-400" />
+          ) : (
+            <Eye className="w-3.5 h-3.5 text-black" />
+          )}
+          <span className={isSplitView ? 'hidden sm:inline' : 'inline'}>
+            {labelMode === 'basic' && 'Etiquetas: Tbs y w'}
+            {labelMode === 'all' && 'Etiquetas: Todas'}
+            {labelMode === 'none' && 'Ocultar Etiquetas'}
+          </span>
+        </button>
+
+        {/* Toggle Floating Layers Window (Ventana de Capas del Diagrama) */}
+        {onToggleLayer && (
+          <button
+            onClick={() => setShowLayersWindow((prev) => !prev)}
+            className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold transition-all cursor-pointer ${
+              showLayersWindow
+                ? 'bg-amber-400 text-black shadow font-extrabold ring-1 ring-amber-300'
+                : 'text-slate-300 hover:text-white hover:bg-slate-800 border border-slate-700/60'
+            }`}
+            title="Abrir ventana flotante de capas del diagrama (Líneas, Escalas, Confort)"
+          >
+            <Layers className={`w-3.5 h-3.5 ${showLayersWindow ? 'text-black' : 'text-amber-400'}`} />
+            <span className={isSplitView ? 'hidden sm:inline' : 'inline'}>Capas</span>
+          </button>
+        )}
+
+        {/* Maximize / Contract Diagram to Full Screen (Ocupar toda la pantalla de la aplicación) */}
+        <button
+          onClick={() => setIsMaximized((prev) => !prev)}
+          className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded text-xs font-semibold transition-all cursor-pointer ${
+            isMaximized
+              ? 'bg-amber-400 text-black shadow font-extrabold ring-1 ring-amber-300'
+              : 'text-amber-300 bg-amber-950/40 border border-amber-800/40 hover:bg-amber-900/50 hover:text-white'
+          }`}
+          title={isMaximized ? "Contraer diagrama (Restaurar tamaño estándar)" : "Maximizar diagrama (Ocupar toda la pantalla de la aplicación)"}
+        >
+          {isMaximized ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5 text-amber-400" />}
+          <span className={isSplitView ? 'hidden sm:inline' : 'inline'}>{isMaximized ? 'Contraer' : 'Maximizar Pantalla'}</span>
+        </button>
+
+        {/* Toggle Floating Point Window in Main Chart */}
+        {selectedPointId && !teachingMode && (
+          <button
+            onClick={() => setShowPointInspector((prev) => !prev)}
+            className={`flex items-center gap-1.5 px-2 py-0.5 rounded-[6px] text-xs font-semibold transition-all ml-1 ${
+              showPointInspector
+                ? 'bg-amber-400/25 text-amber-300 border border-amber-400/50'
+                : 'text-slate-400 hover:text-white hover:bg-white/10'
+            }`}
+            title={showPointInspector ? 'Ocultar ventana flotante de puntos' : 'Mostrar ventana flotante de puntos'}
+          >
+            <span className="w-2 h-2 rounded-full bg-amber-400" />
+            <span className="hidden sm:inline">Ficha de Punto</span>
+          </button>
+        )}
       </div>
 
-      {/* Floating Thermodynamic Inspector HUD (under cursor) */}
-      {hoverCoords && (
-        <div className={`absolute ${isSplitView ? 'bottom-8 right-3' : 'top-2 right-3'} z-20 bg-slate-900/95 backdrop-blur-md px-3.5 py-1.5 rounded-xl border border-cyan-500/40 text-xs shadow-2xl pointer-events-none transition-all`}>
+      {/* Floating Thermodynamic Inspector HUD (under cursor) - Bottom-right corner (hidden when Ocultar Etiquetas is active) */}
+      {layers.pointLabels && hoverCoords && (
+        <div className="absolute bottom-3 right-4 z-20 bg-slate-900/95 backdrop-blur-md px-3.5 py-1.5 rounded-xl border border-cyan-500/40 text-xs shadow-2xl pointer-events-none transition-all">
           <div className="flex items-center gap-3 font-mono text-[11px] tabular-nums">
             <div>
               <span className="text-slate-400">Tbs: </span>
@@ -1791,11 +2392,55 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
         </div>
       )}
 
+      {/* Draggable, Minimizable, Maximizable & Closeable Point Window in Main Chart View */}
+      {!teachingMode && selectedPointId && showPointInspector && (() => {
+        const selectedPt = points.find((p) => p.id === selectedPointId);
+        if (!selectedPt) return null;
+        return (
+          <FloatingPointWindow
+            point={selectedPt}
+            allPoints={points}
+            onSelectPoint={onSelectPoint}
+            onClose={() => setShowPointInspector(false)}
+            onToggleHidePoint={onToggleHidePoint}
+            onDeletePoint={onDeletePoint}
+            onToggleFixParam={handleTogglePointFixParam}
+            onClearFixedParams={handleClearPointFixedParams}
+            onCommitParamValue={handleCommitParamValue}
+            containerRef={chartContainerRef}
+            units={units}
+            storageKey="main_chart_point_window_pos"
+            defaultPosition={{ x: 24, y: 76 }}
+          />
+        );
+      })()}
+
+      {/* Draggable, Minimizable & Closeable Layers Window (Accessible when maximized or normal) */}
+      {showLayersWindow && onToggleLayer && (
+        <FloatingLayersWindow
+          layers={layers}
+          onToggleLayer={onToggleLayer}
+          onClose={() => setShowLayersWindow(false)}
+          containerRef={chartContainerRef}
+          defaultPosition={{ x: 24, y: 56 }}
+        />
+      )}
+
+      {/* Indicador flotante cuando el zoom y paneo están bloqueados */}
+      {isPanZoomLocked && (
+        <div className="absolute top-11 right-3 z-40 pointer-events-none bg-amber-400/95 text-black px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1.5 shadow-xl backdrop-blur-sm border border-amber-300 select-none">
+          <Lock className="w-3.5 h-3.5 text-black" />
+          <span>Zoom & Paneo Bloqueados (Modo Táctil Fijo)</span>
+        </div>
+      )}
+
       {/* Main SVG Canvas: Diagram takes full container width and height */}
       <svg
         ref={svgRef}
         viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.width} ${viewBox.height}`}
-        className={`w-full h-full touch-none select-none ${isPanning ? 'cursor-grabbing' : 'cursor-crosshair'}`}
+        className={`w-full h-full touch-none select-none ${
+          isPanZoomLocked ? 'cursor-default' : isPanning ? 'cursor-grabbing' : 'cursor-crosshair'
+        }`}
         preserveAspectRatio="xMidYMid meet"
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
@@ -1805,7 +2450,11 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
         onTouchEnd={handleTouchEnd}
         onTouchCancel={handleTouchEnd}
         onClick={handleSvgClick}
-        onDoubleClick={handleZoomAll}
+        onDoubleClick={() => {
+          if (!isPanZoomLocked) {
+            handleSetZoom100();
+          }
+        }}
         onContextMenu={(e) => {
           e.preventDefault();
           setContextMenu({
@@ -1876,14 +2525,102 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
           />
         )}
 
-        {/* Interactive 180° Protractor Needle & Click/Hover Overlay for Carrier */}
+        {/* Official ASHRAE Enthalpy Deviation Curves (Desviación Entálpica Δh) */}
+        {Boolean(layers.enthalpyDeviations || showEnthalpyDeviations) && chartType === 'carrier' && (
+          <g className="carrier-enthalpy-deviations pointer-events-none" clipPath="url(#chart-plot-clip)">
+            {enthalpyDeviations.map((line, idx) => {
+              const validPts = line.points.filter(
+                (p) => p.tdb >= bounds.tdbMin && p.tdb <= bounds.tdbMax && p.w >= bounds.wMin && p.w <= bounds.wMax
+              );
+              if (validPts.length < 2) return null;
+              const pathD = validPts
+                .map((pt, i) => {
+                  const [px, py] = coordToPixel(pt.tdb, pt.w);
+                  return `${i === 0 ? 'M' : 'L'} ${px.toFixed(1)} ${py.toFixed(1)}`;
+                })
+                .join(' ');
+              const midPt = validPts[Math.floor(validPts.length / 2)];
+              const [lblX, lblY] = midPt ? coordToPixel(midPt.tdb, midPt.w) : [0, 0];
+
+              return (
+                <g key={`ent-dev-${idx}`} opacity={0.65}>
+                  <path
+                    d={pathD}
+                    fill="none"
+                    stroke="#F59E0B"
+                    strokeWidth="0.85"
+                    strokeDasharray="2.5,2.5"
+                  />
+                  {midPt && (
+                    <text
+                      x={lblX + 2}
+                      y={lblY - 2}
+                      fill="#F59E0B"
+                      fontSize="7.5"
+                      fontFamily="JetBrains Mono"
+                      fontWeight="bold"
+                    >
+                      Δh {line.deviation.toFixed(1)}
+                    </text>
+                  )}
+                </g>
+              );
+            })}
+          </g>
+        )}
+
+        {/* Prominent Línea de Rocío (Curva de Saturación 100% HR) */}
+        <g className="carrier-linea-de-rocio pointer-events-none" clipPath="url(#chart-plot-clip)">
+          <polyline
+            points={chartType === 'mollier' ? mollierSatPolylineStr : carrierSatPolylineStr}
+            fill="none"
+            stroke="#10B981"
+            strokeWidth={teachingMode ? '3.5' : '2.5'}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            opacity={teachingMode ? 0.95 : 0.8}
+            filter="drop-shadow(0 0 5px rgba(16, 185, 129, 0.7))"
+          />
+          {/* Label along the saturation curve (positioned close to the line without overlapping) */}
+          <text
+            x={chartType === 'carrier' ? 320 : 228}
+            y={chartType === 'carrier' ? 438 : 412}
+            fill="#10B981"
+            fontSize="10"
+            fontWeight="bold"
+            fontFamily="Plus Jakarta Sans, sans-serif"
+            letterSpacing="1"
+            transform={chartType === 'carrier' ? 'rotate(-43 320, 438)' : 'rotate(-35 228, 412)'}
+            filter="drop-shadow(0 1px 3px rgba(0,0,0,0.95))"
+          >
+            LÍNEA DE ROCÍO (100%)
+          </text>
+        </g>
+
+        {/* Interactive Protractor Needle & Click/Hover Overlay for Carrier */}
         {showProtractor && chartType === 'carrier' && (
           <g className="carrier-protractor-interactive">
-            {/* Transparent clickable hit area matching the exact 180° semi-circular protractor */}
+            {/* Transparent clickable hit area matching the exact semi-circular protractor */}
             <path
-              d="M 88 75.6 A 108 108 0 0 0 302 75.6 Z"
-              fill="transparent"
-              className="cursor-pointer pointer-events-auto"
+              d="M 92.6 75.6 A 102 102 0 0 0 296.6 75.6 Z"
+              fill="rgba(0,0,0,0.001)"
+              className="cursor-pointer"
+              style={{ pointerEvents: 'all' }}
+              onMouseMove={(e) => {
+                if (!svgRef.current) return;
+                const { x: rawPx, y: rawPy } = getSvgCursorPoint(e);
+                const dx = rawPx - 194.6;
+                const dy = rawPy - 75.6;
+                const d = Math.hypot(dx, dy);
+                if (d >= 10 && d <= 135 && dy >= -5) {
+                  const alpha = Math.atan2(Math.max(0, dy), Math.max(0.0001, -dx));
+                  const calculatedSHR = getCarrierSHRFromAngle(alpha, plotWidth, plotHeight, 60, 0.030);
+                  const matchedTick = ASHRAE_SHR_VALUES.find((t) => Math.abs(t.shr - calculatedSHR) < 0.02);
+                  const finalSHR = matchedTick ? matchedTick.shr : Number(calculatedSHR.toFixed(2));
+                  setHoveredProtractorSHR(finalSHR);
+                }
+              }}
+              onMouseLeave={() => setHoveredProtractorSHR(null)}
               onClick={(e) => {
                 e.stopPropagation();
                 if (hoveredProtractorSHR !== null) {
@@ -1892,23 +2629,65 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
               }}
             />
 
-            {/* Active / Hovered Angle Needle on the 180° Protractor */}
+            {/* Clickable Tick Targets on Carrier Protractor Rim */}
+            {ASHRAE_SHR_VALUES.filter((t) => t.shr >= 0 && t.shr <= 1.0).map((t) => {
+              const alpha = getProtractorAngle(t.shr, plotWidth, plotHeight, 60, 0.030);
+              const cosA = Math.cos(alpha);
+              const sinA = Math.sin(alpha);
+              const tx = 194.6 - 102.0 * cosA;
+              const ty = 75.6 + 102.0 * sinA;
+              const isTickHovered = hoveredProtractorSHR === t.shr;
+              const isTickSelected = selectedSHR === t.shr;
+              const isHigh = isTickHovered || isTickSelected;
+
+              return (
+                <g
+                  key={`carrier-tick-hotspot-${t.shr}`}
+                  className="cursor-pointer"
+                  style={{ pointerEvents: 'all' }}
+                  onMouseEnter={() => setHoveredProtractorSHR(t.shr)}
+                  onMouseLeave={() => setHoveredProtractorSHR(null)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedSHR((prev) => (prev === t.shr ? null : t.shr));
+                  }}
+                >
+                  {/* Invisible extended click target */}
+                  <circle cx={tx} cy={ty} r="7" fill="rgba(0,0,0,0.001)" />
+                  {/* Highlight bead when active */}
+                  {isHigh && (
+                    <circle
+                      cx={tx}
+                      cy={ty}
+                      r={isTickSelected ? '4.5' : '3.5'}
+                      fill="#F59E0B"
+                      stroke="#FFFFFF"
+                      strokeWidth="1.2"
+                      className="pointer-events-none animate-pulse"
+                    />
+                  )}
+                </g>
+              );
+            })}
+
+            {/* Active / Hovered Angle Needle on the Carrier Protractor */}
             {activeSHR !== null && (() => {
               const shr = activeSHR;
               const isCooling = shr >= 0 && shr <= 1.0;
-              const alpha = isCooling
-                ? Math.atan(0.5723 * (1 - shr) / Math.max(0.0001, shr))
-                : Math.atan(0.5723 * Math.abs((1 - shr) / shr));
+              const alpha = getProtractorAngle(shr, plotWidth, plotHeight, 60, 0.030);
               const cosA = Math.cos(alpha);
               const sinA = Math.sin(alpha);
-              const rayEndX = isCooling ? 194.6 - 102.0 * cosA : 194.6 + 102.0 * cosA;
+              const rayEndX = 194.6 - 102.0 * cosA;
               const rayEndY = 75.6 + 102.0 * sinA;
+              const deltaHDeltaW = shr < 1.0 ? (2.501 / (1 - shr)).toFixed(1) : '∞';
 
               return (
                 <g className="carrier-protractor-needle pointer-events-none">
                   {/* Origin hub */}
-                  <circle cx="194.6" cy="75.6" r="4" fill="#F59E0B" />
-                  <circle cx="194.6" cy="75.6" r="7" fill="none" stroke="#F59E0B" strokeWidth="1.2" />
+                  <circle cx="194.6" cy="75.6" r="4.5" fill="#F59E0B" />
+                  <circle cx="194.6" cy="75.6" r="8" fill="none" stroke="#F59E0B" strokeWidth="1.5" />
+                  <line x1="186.6" y1="75.6" x2="202.6" y2="75.6" stroke="#F59E0B" strokeWidth="1" />
+                  <line x1="194.6" y1="67.6" x2="194.6" y2="83.6" stroke="#F59E0B" strokeWidth="1" />
 
                   {/* Needle ray across the 180° protractor */}
                   <line
@@ -1922,24 +2701,24 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
 
                   {/* Pointer bead on the 180° perimeter arc */}
                   <circle cx={rayEndX} cy={rayEndY} r="5" fill="#F59E0B" stroke="#FFFFFF" strokeWidth="1.5" />
-                  <circle cx={rayEndX} cy={rayEndY} r="8.5" fill="none" stroke="#F59E0B" strokeWidth="1" strokeDasharray="2,2" />
+                  <circle cx={rayEndX} cy={rayEndY} r="9" fill="none" stroke="#F59E0B" strokeWidth="1" strokeDasharray="2,2" />
 
-                  {/* SHR Value Tag near perimeter */}
-                  <g transform={`translate(${rayEndX + (isCooling ? -16 : 16)}, ${rayEndY + 16})`}>
+                  {/* Comprehensive SHR / Δh/Δw Value Tag */}
+                  <g transform={`translate(${Math.max(30, Math.min(270, rayEndX + (cosA > 0.5 ? -24 : 16)))}, ${Math.min(195, rayEndY + 18)})`}>
                     <rect
-                      x="-38"
+                      x="-48"
                       y="-12"
-                      width="76"
-                      height="18"
+                      width="96"
+                      height="24"
                       rx="4"
-                      fill={themeStyles.isDark ? 'rgba(15,23,42,0.95)' : 'rgba(255,255,255,0.95)'}
+                      fill={themeStyles.isDark ? 'rgba(15,23,42,0.96)' : 'rgba(255,255,255,0.96)'}
                       stroke="#F59E0B"
                       strokeWidth="1.2"
-                      filter="drop-shadow(0 2px 4px rgba(0,0,0,0.5))"
+                      filter="drop-shadow(0 2px 5px rgba(0,0,0,0.5))"
                     />
                     <text
                       x="0"
-                      y="1.5"
+                      y="-1"
                       textAnchor="middle"
                       fill="#F59E0B"
                       fontSize="9"
@@ -1948,6 +2727,16 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
                     >
                       SHR {shr.toFixed(2)}
                     </text>
+                    <text
+                      x="0"
+                      y="9"
+                      textAnchor="middle"
+                      fill={themeStyles.isDark ? '#94A3B8' : '#475569'}
+                      fontSize="7"
+                      fontFamily="monospace"
+                    >
+                      Δh/Δw = {deltaHDeltaW} kJ/g
+                    </text>
                   </g>
                 </g>
               );
@@ -1955,14 +2744,30 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
           </g>
         )}
 
-        {/* Interactive 180° Protractor Needle & Click/Hover Overlay for Mollier */}
+        {/* Interactive Protractor Needle & Click/Hover Overlay for Mollier */}
         {showProtractor && chartType === 'mollier' && (
           <g className="mollier-protractor-interactive">
-            {/* Transparent clickable hit area matching the exact 180° semi-circular protractor */}
+            {/* Transparent clickable hit area matching the exact Mollier semi-circular protractor */}
             <path
-              d="M 794.0 404 A 78 78 0 0 0 794.0 558 Z"
-              fill="transparent"
-              className="cursor-pointer pointer-events-auto"
+              d="M 722.0 480.7 A 72 72 0 0 0 794.0 552.7 L 794.0 480.7 Z"
+              fill="rgba(0,0,0,0.001)"
+              className="cursor-pointer"
+              style={{ pointerEvents: 'all' }}
+              onMouseMove={(e) => {
+                if (!svgRef.current) return;
+                const { x: rawPx, y: rawPy } = getSvgCursorPoint(e);
+                const dx = 794.0 - rawPx;
+                const dy = rawPy - 480.7;
+                const d = Math.hypot(dx, dy);
+                if (d >= 8 && d <= 95 && dx >= -5 && dy >= -5) {
+                  const gamma = Math.atan2(Math.max(0, dy), Math.max(0.0001, dx));
+                  const calculatedSHR = getMollierSHRFromAngle(gamma, plotWidth, plotHeight, 60, 0.030);
+                  const matchedTick = MOLLIER_SHR_VALUES.find((t) => Math.abs(t.shr - calculatedSHR) < 0.02);
+                  const finalSHR = matchedTick ? matchedTick.shr : Number(calculatedSHR.toFixed(2));
+                  setHoveredProtractorSHR(finalSHR);
+                }
+              }}
+              onMouseLeave={() => setHoveredProtractorSHR(null)}
               onClick={(e) => {
                 e.stopPropagation();
                 if (hoveredProtractorSHR !== null) {
@@ -1971,18 +2776,60 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
               }}
             />
 
-            {/* Active / Hovered Angle Needle on the 180° Protractor */}
+            {/* Clickable Tick Targets on Mollier Protractor Rim */}
+            {MOLLIER_SHR_VALUES.filter((t) => t.shr >= 0 && t.shr <= 1.0).map((t) => {
+              const gamma = getMollierProtractorAngle(t.shr, plotWidth, plotHeight, 60, 0.030);
+              const cosG = Math.cos(gamma);
+              const sinG = Math.sin(gamma);
+              const tx = 794.0 - 72.0 * cosG;
+              const ty = 480.7 + 72.0 * sinG;
+              const isTickHovered = hoveredProtractorSHR === t.shr;
+              const isTickSelected = selectedSHR === t.shr;
+              const isHigh = isTickHovered || isTickSelected;
+
+              return (
+                <g
+                  key={`mollier-tick-hotspot-${t.shr}`}
+                  className="cursor-pointer"
+                  style={{ pointerEvents: 'all' }}
+                  onMouseEnter={() => setHoveredProtractorSHR(t.shr)}
+                  onMouseLeave={() => setHoveredProtractorSHR(null)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedSHR((prev) => (prev === t.shr ? null : t.shr));
+                  }}
+                >
+                  <circle cx={tx} cy={ty} r="7" fill="rgba(0,0,0,0.001)" />
+                  {isHigh && (
+                    <circle
+                      cx={tx}
+                      cy={ty}
+                      r={isTickSelected ? '4.5' : '3.5'}
+                      fill="#F59E0B"
+                      stroke="#FFFFFF"
+                      strokeWidth="1.2"
+                      className="pointer-events-none animate-pulse"
+                    />
+                  )}
+                </g>
+              );
+            })}
+
+            {/* Active / Hovered Angle Needle on the Mollier Protractor */}
             {activeSHR !== null && (() => {
               const shr = activeSHR;
-              const gamma = Math.atan(1.27 * shr / Math.max(0.001, 1 - shr));
+              const gamma = getMollierProtractorAngle(shr, plotWidth, plotHeight, 60, 0.030);
               const rayEndX = 794.0 - 72.0 * Math.cos(gamma);
               const rayEndY = 480.7 + 72.0 * Math.sin(gamma);
+              const deltaHDeltaW = shr < 1.0 ? (2.501 / (1 - shr)).toFixed(1) : '∞';
 
               return (
                 <g className="mollier-protractor-needle pointer-events-none">
                   {/* Origin hub */}
-                  <circle cx="794.0" cy="480.7" r="3.5" fill="#F59E0B" />
-                  <circle cx="794.0" cy="480.7" r="6.5" fill="none" stroke="#F59E0B" strokeWidth="1.2" />
+                  <circle cx="794.0" cy="480.7" r="4.5" fill="#F59E0B" />
+                  <circle cx="794.0" cy="480.7" r="8" fill="none" stroke="#F59E0B" strokeWidth="1.5" />
+                  <line x1="786.0" y1="480.7" x2="802.0" y2="480.7" stroke="#F59E0B" strokeWidth="1" />
+                  <line x1="794.0" y1="472.7" x2="794.0" y2="488.7" stroke="#F59E0B" strokeWidth="1" />
 
                   {/* Needle ray across the 180° protractor */}
                   <line
@@ -1998,29 +2845,39 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
                   <circle cx={rayEndX} cy={rayEndY} r="4.5" fill="#F59E0B" stroke="#FFFFFF" strokeWidth="1.5" />
                   <circle cx={rayEndX} cy={rayEndY} r="8" fill="none" stroke="#F59E0B" strokeWidth="1" strokeDasharray="2,2" />
 
-                  {/* SHR Value Tag */}
-                  <g transform={`translate(${rayEndX - 26}, ${rayEndY})`}>
+                  {/* Comprehensive FCS / Δh/Δw Value Tag */}
+                  <g transform={`translate(${Math.max(680, rayEndX - 35)}, ${Math.min(560, rayEndY + 18)})`}>
                     <rect
-                      x="-38"
-                      y="-10"
-                      width="76"
-                      height="18"
+                      x="-48"
+                      y="-12"
+                      width="96"
+                      height="24"
                       rx="4"
-                      fill={themeStyles.isDark ? 'rgba(15,23,42,0.95)' : 'rgba(255,255,255,0.95)'}
+                      fill={themeStyles.isDark ? 'rgba(15,23,42,0.96)' : 'rgba(255,255,255,0.96)'}
                       stroke="#F59E0B"
                       strokeWidth="1.2"
-                      filter="drop-shadow(0 2px 4px rgba(0,0,0,0.5))"
+                      filter="drop-shadow(0 2px 5px rgba(0,0,0,0.5))"
                     />
                     <text
                       x="0"
-                      y="3"
+                      y="-1"
                       textAnchor="middle"
                       fill="#F59E0B"
                       fontSize="9"
                       fontWeight="bold"
                       fontFamily="monospace"
                     >
-                      SHR {shr.toFixed(2)}
+                      FCS {shr.toFixed(2)}
+                    </text>
+                    <text
+                      x="0"
+                      y="9"
+                      textAnchor="middle"
+                      fill={themeStyles.isDark ? '#94A3B8' : '#475569'}
+                      fontSize="7"
+                      fontFamily="monospace"
+                    >
+                      Δh/Δw = {deltaHDeltaW} kJ/g
                     </text>
                   </g>
                 </g>
@@ -2031,26 +2888,62 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
 
         {/* 2. Interactive Diagram Contents (Scaled & Panned strictly inside plot area) */}
         <g clipPath="url(#chart-plot-clip)">
-          {/* Comfort Zones: ASHRAE 55 */}
-          {layers.comfortSummer && (
-            <polygon
-              points={chartCurves.summerComfortPoly}
-              fill="rgba(16, 185, 129, 0.15)"
-              stroke="#10B981"
-              strokeWidth="1.5"
-              strokeDasharray="4,2"
-            />
-          )}
+          {/* Comfort Zones: ASHRAE 55-2020 */}
+          {layers.comfortSummer && (() => {
+            const [cx, cy] = coordToPixel(25.5, 0.007);
+            return (
+              <g className="comfort-summer-layer pointer-events-none">
+                <polygon
+                  points={chartCurves.summerComfortPoly}
+                  fill="rgba(16, 185, 129, 0.16)"
+                  stroke="#10B981"
+                  strokeWidth="1.8"
+                  strokeDasharray="5,3"
+                />
+                <text
+                  x={cx}
+                  y={cy}
+                  textAnchor="middle"
+                  fill="#10B981"
+                  fontSize="9.5"
+                  fontWeight="bold"
+                  fontFamily="Plus Jakarta Sans, sans-serif"
+                  opacity="0.95"
+                  filter="drop-shadow(0 1px 3px rgba(0,0,0,0.85))"
+                >
+                  ASHRAE 55 Verano (0.5 clo · W ≤ 12 g/kg)
+                </text>
+              </g>
+            );
+          })()}
 
-          {layers.comfortWinter && (
-            <polygon
-              points={chartCurves.winterComfortPoly}
-              fill="rgba(245, 158, 11, 0.15)"
-              stroke="#F59E0B"
-              strokeWidth="1.5"
-              strokeDasharray="4,2"
-            />
-          )}
+          {layers.comfortWinter && (() => {
+            const [cx, cy] = coordToPixel(22.0, 0.007);
+            return (
+              <g className="comfort-winter-layer pointer-events-none">
+                <polygon
+                  points={chartCurves.winterComfortPoly}
+                  fill="rgba(245, 158, 11, 0.16)"
+                  stroke="#F59E0B"
+                  strokeWidth="1.8"
+                  strokeDasharray="5,3"
+                />
+                <text
+                  x={cx}
+                  y={cy}
+                  textAnchor="middle"
+                  fill="#F59E0B"
+                  fontSize="9.5"
+                  fontWeight="bold"
+                  fontFamily="Plus Jakarta Sans, sans-serif"
+                  opacity="0.95"
+                  filter="drop-shadow(0 1px 3px rgba(0,0,0,0.85))"
+                >
+                  ASHRAE 55 Invierno (1.0 clo · W ≤ 12 g/kg)
+                </text>
+              </g>
+            );
+          })()}
 
           {/* Comfort Zones: Marco Europeo UNE-EN ISO 7730 & UNE-EN 16798-1 */}
           {layers.comfortEnCat3 && (
@@ -2081,6 +2974,78 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
               strokeWidth="1.6"
             />
           )}
+
+          {/* OTS Psychrochart Feature A: Multi-Scenario Condition Overlays */}
+          {overlayConditions.map((cond) => {
+            if (!cond.isOverlayVisible) return null;
+            return (
+              <g key={`overlay-${cond.id}`} className="overlay-condition-group" opacity={0.72}>
+                {cond.processes.map((proc) => {
+                  const ptFrom = cond.points.find((p) => p.id === proc.fromPointId);
+                  const ptTo = cond.points.find((p) => p.id === proc.toPointId);
+                  if (!ptFrom || !ptTo) return null;
+                  const [x1, y1] = coordToPixel(ptFrom.tdb, ptFrom.w);
+                  const [x2, y2] = coordToPixel(ptTo.tdb, ptTo.w);
+                  const midX = (x1 + x2) / 2;
+                  const midY = (y1 + y2) / 2;
+                  return (
+                    <g key={`overlay-proc-${proc.id}`}>
+                      <line
+                        x1={x1}
+                        y1={y1}
+                        x2={x2}
+                        y2={y2}
+                        stroke={cond.color}
+                        strokeWidth="2.2"
+                        strokeDasharray="4,4"
+                      />
+                      <rect
+                        x={midX - 32}
+                        y={midY - 8}
+                        width={64}
+                        height={16}
+                        rx="3"
+                        fill={themeStyles.plotBg}
+                        stroke={cond.color}
+                        strokeWidth="1"
+                        opacity="0.92"
+                      />
+                      <text
+                        x={midX}
+                        y={midY + 3.5}
+                        textAnchor="middle"
+                        fill={cond.color}
+                        fontSize="8"
+                        fontWeight="700"
+                        fontFamily="Plus Jakarta Sans, sans-serif"
+                      >
+                        {cond.name.slice(0, 12)}
+                      </text>
+                    </g>
+                  );
+                })}
+                {cond.points.map((pt) => {
+                  const [px, py] = coordToPixel(pt.tdb, pt.w);
+                  return (
+                    <g key={`overlay-pt-${pt.id}`} transform={`translate(${px}, ${py})`}>
+                      <circle r="6" fill="none" stroke={cond.color} strokeWidth="1.8" strokeDasharray="3,2" />
+                      <circle r="2.5" fill={cond.color} />
+                      <text
+                        x="8"
+                        y="3"
+                        fill={cond.color}
+                        fontSize="8"
+                        fontWeight="700"
+                        fontFamily="monospace"
+                      >
+                        {pt.name.split('.')[0] || pt.name}
+                      </text>
+                    </g>
+                  );
+                })}
+              </g>
+            );
+          })}
 
           {layers.processes && (
             <g className="processes-layer">
@@ -2140,6 +3105,60 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
                       markerEnd={proc.type === 'mixing' ? 'url(#process-arrow-amber)' : 'url(#process-arrow)'}
                       filter={isIsolated && hasActiveIsolation ? 'drop-shadow(0 0 6px rgba(56,189,248,0.8))' : undefined}
                     />
+
+                    {/* OTS Feature C: Apparatus Dew Point (ADP) Projection line and Saturation Marker */}
+                    {proc.adp !== undefined && proc.adp > -25 && (
+                      (() => {
+                        const wAdp = getSaturationHumidityRatio(proc.adp, pressure);
+                        const [xAdp, yAdp] = coordToPixel(proc.adp, wAdp);
+                        return (
+                          <g key={`adp-proj-${proc.id}`} opacity={lineOpacity * 0.85}>
+                            {/* Dashed projection line from exit point to ADP on saturation curve */}
+                            <line
+                              x1={x2}
+                              y1={y2}
+                              x2={xAdp}
+                              y2={yAdp}
+                              stroke={proc.isFrostRisk ? '#06B6D4' : '#0284C7'}
+                              strokeWidth="1.5"
+                              strokeDasharray="3,3"
+                            />
+                            {/* ADP Saturation Point Marker */}
+                            <circle
+                              cx={xAdp}
+                              cy={yAdp}
+                              r="3.5"
+                              fill={proc.isFrostRisk ? '#06B6D4' : '#0284C7'}
+                              stroke={themeStyles.plotBg}
+                              strokeWidth="1.5"
+                            />
+                            {/* ADP Badge */}
+                            <g transform={`translate(${xAdp - 24}, ${yAdp - 14})`}>
+                              <rect
+                                width="48"
+                                height="12"
+                                rx="2"
+                                fill={themeStyles.plotBg}
+                                stroke={proc.isFrostRisk ? '#06B6D4' : '#0284C7'}
+                                strokeWidth="0.8"
+                                opacity="0.9"
+                              />
+                              <text
+                                x="24"
+                                y="8.5"
+                                textAnchor="middle"
+                                fill={proc.isFrostRisk ? '#06B6D4' : '#0284C7'}
+                                fontSize="7.5"
+                                fontWeight="700"
+                                fontFamily="monospace"
+                              >
+                                {proc.isFrostRisk ? `❄ ${proc.adp.toFixed(1)}°` : `ADP ${proc.adp.toFixed(1)}°`}
+                              </text>
+                            </g>
+                          </g>
+                        );
+                      })()
+                    )}
 
                     {/* Anti-collision Leader Line (if badge is offset from line) */}
                     {placedBadge && placedBadge.hasLeader && (
@@ -2211,8 +3230,16 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
                           fontWeight="700"
                           fontFamily="Plus Jakarta Sans, sans-serif"
                         >
-                          {proc.qTotal.toFixed(1)} kW
+                          {proc.isFrostRisk ? `❄ ${proc.qTotal.toFixed(1)} kW` : `${proc.qTotal.toFixed(1)} kW`}
                         </text>
+                        {proc.isFrostRisk && (
+                          <circle
+                            cx={placedBadge.width / 2 - 4}
+                            cy={-placedBadge.height / 2 + 4}
+                            r="3"
+                            fill="#F43F5E"
+                          />
+                        )}
                       </g>
                     )}
                   </g>
@@ -2381,6 +3408,620 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
             );
           })()}
 
+          {/* Teaching Overlays: Projections to axes and Mixture Lever Ruler */}
+          {(teachingGuidePointId || (teachingMode && selectedPointId)) && (() => {
+            const targetId = teachingGuidePointId || selectedPointId;
+            const guidePt = points.find((p) => p.id === targetId);
+            if (!guidePt || guidePt.hidden) return null;
+
+            // Value tags (etiquetas de valores) over the diagram according to labelMode (none, basic, all)
+            const showValueBadges = !guidePt.hidden && layers.pointLabels && labelMode !== 'none';
+            const showTdbWBadges = showValueBadges && (labelMode === 'basic' || labelMode === 'all');
+            const showOtherBadges = showValueBadges && labelMode === 'all';
+            const showOtherProjections = labelMode === 'all';
+
+            const [px, py] = coordToPixel(guidePt.tdb, guidePt.w);
+            const bottomY = margin.top + plotHeight;
+            const rightX = margin.left + plotWidth;
+            const leftX = margin.left;
+
+            const isCarrier = chartType === 'carrier';
+            const tdp = guidePt.tdp;
+            const twb = guidePt.twb;
+
+            // Dew point on saturation curve (must lie 100% on the drawn Línea de Rocío)
+            const [pDewX, pDewY] = isCarrier
+              ? getCarrierDewPointOnSaturation(guidePt.w)
+              : getMollierDewPointOnSaturation(guidePt.w);
+
+            // Wet bulb point on saturation curve (must lie 100% on the drawn Línea de Rocío)
+            const [pWbX, pWbY] = isCarrier
+              ? getCarrierWetBulbPointOnSaturation(twb)
+              : getMollierWetBulbPointOnSaturation(twb);
+
+            // Dry bulb bottom axis point (following slanted dry-bulb isotherm in Carrier)
+            const [bottomTdbX] = isCarrier
+              ? coordToPixelCarrier(guidePt.tdb, 0)
+              : [px, bottomY];
+
+            // Dew point bottom axis point (following dry-bulb isotherm from the saturation point)
+            const [bottomTdpX] = isCarrier
+              ? coordToPixelCarrier(tdp, 0)
+              : [pDewX, bottomY];
+
+            // Wet bulb bottom axis point (following dry-bulb isotherm from the saturation point)
+            const [bottomTwbX] = isCarrier
+              ? coordToPixelCarrier(twb, 0)
+              : [pWbX, bottomY];
+
+            // Enthalpy point on outer scale:
+            const [pHScaleX, pHScaleY] = isCarrier
+              ? getCarrierEnthalpyScalePoint(guidePt.h)
+              : [leftX + 25, margin.top + 35];
+
+            // Relative humidity curve highlight arc points around (px, py):
+            const rhT1 = Math.max(bounds.tdbMin, guidePt.tdb - 4);
+            const rhT2 = Math.min(bounds.tdbMax, guidePt.tdb + 4);
+            const rhW1 = getWFromTdbRh(rhT1, guidePt.rh, pressure);
+            const rhW2 = getWFromTdbRh(rhT2, guidePt.rh, pressure);
+            const [rhP1x, rhP1y] = coordToPixel(rhT1, rhW1);
+            const [rhP2x, rhP2y] = coordToPixel(rhT2, rhW2);
+
+            // Specific volume guideline endpoints:
+            const vDx = 28;
+            const vDy = isCarrier ? 76 : -76;
+
+            const getParamOpacity = (param: string) => {
+              if (!teachingGuideParam) return 1;
+              return teachingGuideParam === param ? 1 : 0.2;
+            };
+
+            return (
+              <g className="teaching-projections-layer pointer-events-none">
+                {/* 1. Dry Bulb Projection */}
+                <g className="proyeccion-tbs" opacity={getParamOpacity('tdb')}>
+                  {isCarrier ? (
+                    <g>
+                      <line
+                        x1={px}
+                        y1={py}
+                        x2={bottomTdbX}
+                        y2={bottomY}
+                        stroke="#F59E0B"
+                        strokeWidth="2"
+                        strokeDasharray="4,3"
+                      />
+                      {showTdbWBadges && (
+                        <g>
+                          <rect
+                            x={bottomTdbX - 38}
+                            y={bottomY - 22}
+                            width="76"
+                            height="18"
+                            rx="3"
+                            fill="#0a0a0c"
+                            stroke="#F59E0B"
+                            strokeWidth="1.2"
+                          />
+                          <text
+                            x={bottomTdbX}
+                            y={bottomY - 9}
+                            textAnchor="middle"
+                            fill="#F59E0B"
+                            fontSize="9.5"
+                            fontWeight="bold"
+                            fontFamily="JetBrains Mono"
+                          >
+                            Tbs: {guidePt.tdb.toFixed(1)}°C
+                          </text>
+                        </g>
+                      )}
+                    </g>
+                  ) : (
+                    <g>
+                      <line
+                        x1={px}
+                        y1={py}
+                        x2={leftX}
+                        y2={py}
+                        stroke="#F59E0B"
+                        strokeWidth="2"
+                        strokeDasharray="4,3"
+                      />
+                      {showTdbWBadges && (
+                        <g>
+                          <rect
+                            x={leftX + 4}
+                            y={py - 9}
+                            width="76"
+                            height="18"
+                            rx="3"
+                            fill="#0a0a0c"
+                            stroke="#F59E0B"
+                            strokeWidth="1.2"
+                          />
+                          <text
+                            x={leftX + 42}
+                            y={py + 4}
+                            textAnchor="middle"
+                            fill="#F59E0B"
+                            fontSize="9.5"
+                            fontWeight="bold"
+                            fontFamily="JetBrains Mono"
+                          >
+                            Tbs: {guidePt.tdb.toFixed(1)}°C
+                          </text>
+                        </g>
+                      )}
+                    </g>
+                  )}
+                </g>
+
+                {/* 2. Humidity Ratio Projection */}
+                <g className="proyeccion-w" opacity={getParamOpacity('w')}>
+                  {isCarrier ? (
+                    <g>
+                      <line
+                        x1={px}
+                        y1={py}
+                        x2={rightX}
+                        y2={py}
+                        stroke="#38BDF8"
+                        strokeWidth="2"
+                        strokeDasharray="4,3"
+                      />
+                      {showTdbWBadges && (
+                        <g>
+                          <rect
+                            x={rightX - 86}
+                            y={py - 9}
+                            width="82"
+                            height="18"
+                            rx="3"
+                            fill="#0a0a0c"
+                            stroke="#38BDF8"
+                            strokeWidth="1.2"
+                          />
+                          <text
+                            x={rightX - 45}
+                            y={py + 4}
+                            textAnchor="middle"
+                            fill="#38BDF8"
+                            fontSize="9.5"
+                            fontWeight="bold"
+                            fontFamily="JetBrains Mono"
+                          >
+                            w: {(guidePt.w * 1000).toFixed(2)} g/kg
+                          </text>
+                        </g>
+                      )}
+                    </g>
+                  ) : (
+                    <g>
+                      <line
+                        x1={px}
+                        y1={py}
+                        x2={px}
+                        y2={bottomY}
+                        stroke="#38BDF8"
+                        strokeWidth="2"
+                        strokeDasharray="4,3"
+                      />
+                      {showTdbWBadges && (
+                        <g>
+                          <rect
+                            x={px - 43}
+                            y={bottomY - 22}
+                            width="86"
+                            height="18"
+                            rx="3"
+                            fill="#0a0a0c"
+                            stroke="#38BDF8"
+                            strokeWidth="1.2"
+                          />
+                          <text
+                            x={px}
+                            y={bottomY - 9}
+                            textAnchor="middle"
+                            fill="#38BDF8"
+                            fontSize="9.5"
+                            fontWeight="bold"
+                            fontFamily="JetBrains Mono"
+                          >
+                            x: {(guidePt.w * 1000).toFixed(2)} g/kg
+                          </text>
+                        </g>
+                      )}
+                    </g>
+                  )}
+                </g>
+
+                {/* 3 to 7. Other Projections (Rocío, Húmedo, Entalpía, HR, Volumen) - Shown only in Estado 3: Todas */}
+                {showOtherProjections && (
+                  <>
+                    {/* 3. Dew Point Projection (Horizontal to Línea de Rocío) */}
+                    <g className="proyeccion-tpr-linea-de-rocio" opacity={getParamOpacity('tdp')}>
+                  <line
+                    x1={px}
+                    y1={py}
+                    x2={pDewX}
+                    y2={pDewY}
+                    stroke="#10B981"
+                    strokeWidth="2.5"
+                    strokeDasharray="4,3"
+                  />
+                  {/* Drop-line from Línea de Rocío to bottom axis */}
+                  <line
+                    x1={pDewX}
+                    y1={pDewY}
+                    x2={bottomTdpX}
+                    y2={bottomY}
+                    stroke="#10B981"
+                    strokeWidth="1.5"
+                    strokeDasharray="3,3"
+                    opacity="0.85"
+                  />
+                  {/* Target ring planted directly ON the Línea de Rocío */}
+                  <circle cx={pDewX} cy={pDewY} r="7.5" fill="#10B981" stroke="#FFFFFF" strokeWidth="2" filter="drop-shadow(0 0 6px #10B981)" />
+                  <circle cx={pDewX} cy={pDewY} r="3" fill="#0a0a0c" />
+                  
+                  {/* Badge directly beside the Línea de Rocío */}
+                  {showValueBadges && (
+                    <g transform={`translate(${Math.max(margin.left + 4, pDewX - 110)}, ${Math.max(margin.top + 4, pDewY - 26)})`}>
+                      <rect
+                        x="0"
+                        y="0"
+                        width="106"
+                        height="21"
+                        rx="4"
+                        fill="#0a0a0c"
+                        stroke="#10B981"
+                        strokeWidth="1.5"
+                        filter="drop-shadow(0 2px 6px rgba(0,0,0,0.85))"
+                      />
+                      <text
+                        x="53"
+                        y="14.5"
+                        textAnchor="middle"
+                        fill="#10B981"
+                        fontSize="10"
+                        fontWeight="bold"
+                        fontFamily="JetBrains Mono"
+                      >
+                        Tpr: {tdp.toFixed(1)}°C (Rocío)
+                      </text>
+                    </g>
+                  )}
+
+                  {/* Axis indicator at bottom */}
+                  {showValueBadges && (
+                    <g transform={`translate(${bottomTdpX}, ${bottomY})`}>
+                      <rect
+                        x="-36"
+                        y="-22"
+                        width="72"
+                        height="18"
+                        rx="3"
+                        fill="#0a0a0c"
+                        stroke="#10B981"
+                        strokeWidth="1.2"
+                      />
+                      <text
+                        x="0"
+                        y="-9"
+                        textAnchor="middle"
+                        fill="#10B981"
+                        fontSize="9.5"
+                        fontWeight="bold"
+                        fontFamily="JetBrains Mono"
+                      >
+                        Tpr: {tdp.toFixed(1)}°C
+                      </text>
+                    </g>
+                  )}
+                </g>
+
+                {/* 4. Wet Bulb Projection (along wet-bulb slope to Línea de Rocío) */}
+                <g className="proyeccion-tbh-linea-de-rocio" opacity={getParamOpacity('twb')}>
+                  <line
+                    x1={px}
+                    y1={py}
+                    x2={pWbX}
+                    y2={pWbY}
+                    stroke="#A855F7"
+                    strokeWidth="2.5"
+                    strokeDasharray="4,3"
+                  />
+                  {/* Drop-line from Línea de Rocío to bottom axis */}
+                  <line
+                    x1={pWbX}
+                    y1={pWbY}
+                    x2={bottomTwbX}
+                    y2={bottomY}
+                    stroke="#A855F7"
+                    strokeWidth="1.5"
+                    strokeDasharray="3,3"
+                    opacity="0.85"
+                  />
+                  {/* Target ring planted directly ON the Línea de Rocío */}
+                  <circle cx={pWbX} cy={pWbY} r="7.5" fill="#A855F7" stroke="#FFFFFF" strokeWidth="2" filter="drop-shadow(0 0 6px #A855F7)" />
+                  <circle cx={pWbX} cy={pWbY} r="3" fill="#0a0a0c" />
+
+                  {/* Badge directly beside the Línea de Rocío */}
+                  {showValueBadges && (
+                    <g transform={`translate(${Math.max(margin.left + 4, pWbX - 110)}, ${Math.max(margin.top + 4, pWbY - 26)})`}>
+                      <rect
+                        x="0"
+                        y="0"
+                        width="106"
+                        height="21"
+                        rx="4"
+                        fill="#0a0a0c"
+                        stroke="#A855F7"
+                        strokeWidth="1.5"
+                        filter="drop-shadow(0 2px 6px rgba(0,0,0,0.85))"
+                      />
+                      <text
+                        x="53"
+                        y="14.5"
+                        textAnchor="middle"
+                        fill="#A855F7"
+                        fontSize="10"
+                        fontWeight="bold"
+                        fontFamily="JetBrains Mono"
+                      >
+                        Tbh: {twb.toFixed(1)}°C (Rocío)
+                      </text>
+                    </g>
+                  )}
+
+                  {/* Axis indicator at bottom */}
+                  {showValueBadges && (
+                    <g transform={`translate(${bottomTwbX}, ${bottomY})`}>
+                      <rect
+                        x="-36"
+                        y="-22"
+                        width="72"
+                        height="18"
+                        rx="3"
+                        fill="#0a0a0c"
+                        stroke="#A855F7"
+                        strokeWidth="1.2"
+                      />
+                      <text
+                        x="0"
+                        y="-9"
+                        textAnchor="middle"
+                        fill="#A855F7"
+                        fontSize="9.5"
+                        fontWeight="bold"
+                        fontFamily="JetBrains Mono"
+                      >
+                        Tbh: {twb.toFixed(1)}°C
+                      </text>
+                    </g>
+                  )}
+                </g>
+
+                {/* 5. Specific Enthalpy Projection (Extended to Outer Enthalpy Scale) */}
+                {(() => {
+                  const badgeX = Math.max(margin.left - 45, Math.min(rightX - 100, pHScaleX - 45));
+                  const badgeY = Math.max(margin.top - 20, Math.min(bottomY - 25, pHScaleY - 24));
+                  return (
+                    <g className="proyeccion-h" opacity={getParamOpacity('h')}>
+                      <line
+                        x1={px}
+                        y1={py}
+                        x2={pHScaleX}
+                        y2={pHScaleY}
+                        stroke="#4ADE80"
+                        strokeWidth="2.5"
+                        strokeDasharray="4,3"
+                      />
+                      <circle cx={pHScaleX} cy={pHScaleY} r="6" fill="#4ADE80" stroke="#FFFFFF" strokeWidth="1.5" />
+                      {showValueBadges && (
+                        <g transform={`translate(${badgeX}, ${badgeY})`}>
+                          <rect
+                            x="0"
+                            y="0"
+                            width="96"
+                            height="20"
+                            rx="4"
+                            fill="#0a0a0c"
+                            stroke="#4ADE80"
+                            strokeWidth="1.5"
+                            filter="drop-shadow(0 2px 6px rgba(0,0,0,0.85))"
+                          />
+                          <text
+                            x="48"
+                            y="14"
+                            textAnchor="middle"
+                            fill="#4ADE80"
+                            fontSize="10"
+                            fontWeight="bold"
+                            fontFamily="JetBrains Mono"
+                          >
+                            h: {guidePt.h.toFixed(1)} kJ/kg
+                          </text>
+                        </g>
+                      )}
+                    </g>
+                  );
+                })()}
+
+                {/* 6. Relative Humidity Isoline Highlight & Badge */}
+                {(() => {
+                  const rhBadgeX = Math.max(margin.left + 10, Math.min(rightX - 95, px + 22));
+                  const rhBadgeY = Math.max(margin.top + 10, Math.min(bottomY - 30, py - 20));
+                  return (
+                    <g className="proyeccion-rh" opacity={getParamOpacity('rh')}>
+                      <path
+                        d={`M ${rhP1x} ${rhP1y} Q ${px} ${py} ${rhP2x} ${rhP2y}`}
+                        fill="none"
+                        stroke="#F43F5E"
+                        strokeWidth="3.5"
+                        opacity="0.9"
+                      />
+                      {showValueBadges && (
+                        <g transform={`translate(${rhBadgeX}, ${rhBadgeY})`}>
+                          <rect
+                            x="0"
+                            y="0"
+                            width="86"
+                            height="20"
+                            rx="4"
+                            fill="#0a0a0c"
+                            stroke="#F43F5E"
+                            strokeWidth="1.5"
+                            filter="drop-shadow(0 2px 6px rgba(0,0,0,0.85))"
+                          />
+                          <text
+                            x="43"
+                            y="14"
+                            textAnchor="middle"
+                            fill="#F43F5E"
+                            fontSize="10"
+                            fontWeight="bold"
+                            fontFamily="JetBrains Mono"
+                          >
+                            HR: {guidePt.rh.toFixed(1)}%
+                          </text>
+                        </g>
+                      )}
+                    </g>
+                  );
+                })()}
+
+                {/* 7. Specific Volume Guideline & Badge */}
+                <g className="proyeccion-v" opacity={getParamOpacity('v')}>
+                  <line
+                    x1={px + vDx}
+                    y1={py + vDy}
+                    x2={px - vDx}
+                    y2={py - vDy}
+                    stroke="#06B6D4"
+                    strokeWidth="1.8"
+                    strokeDasharray="5,4"
+                    opacity="0.8"
+                  />
+                  {showValueBadges && (
+                    <g transform={`translate(${Math.min(rightX - 95, px + vDx - 44)}, ${Math.min(bottomY - 25, py + vDy + 6)})`}>
+                      <rect
+                        x="0"
+                        y="0"
+                        width="88"
+                        height="19"
+                        rx="3"
+                        fill="#0a0a0c"
+                        stroke="#06B6D4"
+                        strokeWidth="1.5"
+                        filter="drop-shadow(0 2px 5px rgba(0,0,0,0.8))"
+                      />
+                      <text
+                        x="44"
+                        y="14"
+                        textAnchor="middle"
+                        fill="#06B6D4"
+                        fontSize="9"
+                        fontWeight="bold"
+                        fontFamily="JetBrains Mono"
+                      >
+                        v: {guidePt.v.toFixed(3)} m³/kg
+                      </text>
+                    </g>
+                  )}
+                </g>
+              </>
+            )}
+          </g>
+            );
+          })()}
+
+          {/* Teaching Mixture Rule Overlay (Visual Lever Ruler) */}
+          {teachingMixtureInfo && (() => {
+            const { point1, point2, mixturePoint, ratio } = teachingMixtureInfo;
+            const [p1x, p1y] = coordToPixel(point1.tdb, point1.w);
+            const [p2x, p2y] = coordToPixel(point2.tdb, point2.w);
+            const [pmx, pmy] = coordToPixel(mixturePoint.tdb, mixturePoint.w);
+
+            return (
+              <g className="teaching-mixture-layer pointer-events-none">
+                {/* Full baseline dashed line connecting A and B */}
+                <line
+                  x1={p1x}
+                  y1={p1y}
+                  x2={p2x}
+                  y2={p2y}
+                  stroke="#F59E0B"
+                  strokeWidth="5"
+                  strokeDasharray="7,4"
+                  opacity="0.85"
+                />
+
+                {/* Outdoor air branch (A -> M) highlighted in blue */}
+                <line
+                  x1={p1x}
+                  y1={p1y}
+                  x2={pmx}
+                  y2={pmy}
+                  stroke="#38BDF8"
+                  strokeWidth="5.5"
+                  strokeLinecap="round"
+                  opacity="0.9"
+                />
+
+                {/* Return air branch (M -> B) highlighted in emerald */}
+                <line
+                  x1={pmx}
+                  y1={pmy}
+                  x2={p2x}
+                  y2={p2y}
+                  stroke="#10B981"
+                  strokeWidth="5.5"
+                  strokeLinecap="round"
+                  opacity="0.9"
+                />
+
+                {/* Lever Rule Explanatory Callout Banner near Point M (hidden when Ocultar Etiquetas is active) */}
+                {layers.pointLabels && (
+                  <g transform={`translate(${Math.min(pmx + 18, plotWidth - 140)}, ${Math.max(pmy - 34, margin.top + 20)})`}>
+                    <rect
+                      x="0"
+                      y="0"
+                      width="175"
+                      height="36"
+                      rx="5"
+                      fill="#0f172a"
+                      stroke="#F59E0B"
+                      strokeWidth="1.5"
+                      opacity="0.95"
+                      filter="drop-shadow(0 2px 8px rgba(0,0,0,0.8))"
+                    />
+                    <text
+                      x="8"
+                      y="15"
+                      fill="#F59E0B"
+                      fontSize="10"
+                      fontWeight="bold"
+                      fontFamily="Plus Jakarta Sans, sans-serif"
+                    >
+                      ⚖️ Regla de la Palanca Inversa
+                    </text>
+                    <text
+                      x="8"
+                      y="29"
+                      fill="#cbd5e1"
+                      fontSize="9.5"
+                      fontFamily="JetBrains Mono"
+                    >
+                      {(ratio * 100).toFixed(0)}% Ext. · {((1 - ratio) * 100).toFixed(0)}% Retorno
+                    </text>
+                  </g>
+                )}
+              </g>
+            );
+          })()}
+
           {/* Interactive State Points */}
           <g className="state-points-layer">
             {/* 1. Point markers and selection halos */}
@@ -2389,16 +4030,18 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
               if (hasActiveIsolation && !isPtIsolated && !dimOtherProcesses) {
                 return null;
               }
-              const ptOpacity = hasActiveIsolation && !isPtIsolated ? 0.15 : 1;
-              const [px, py] = coordToPixel(pt.tdb, pt.w);
               const isSelected = pt.id === selectedPointId;
+              const ptOpacity = hasActiveIsolation && !isPtIsolated ? 0.15 : (pt.hidden ? 0.85 : 1);
+              const [px, py] = coordToPixel(pt.tdb, pt.w);
 
               return (
                 <g
                   key={pt.id}
+                  data-point-id={pt.id}
                   transform={`translate(${px}, ${py})`}
-                  className={hasActiveIsolation && !isPtIsolated ? 'pointer-events-none' : 'cursor-pointer'}
+                  className={hasActiveIsolation && !isPtIsolated ? 'pointer-events-none' : 'cursor-grab active:cursor-grabbing'}
                   opacity={ptOpacity}
+                  style={{ touchAction: 'none' }}
                   onClick={(e) => {
                     e.stopPropagation();
                     onSelectPoint(pt.id);
@@ -2407,6 +4050,31 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
                     e.stopPropagation();
                     setDraggedPointId(pt.id);
                     onSelectPoint(pt.id);
+                  }}
+                  onTouchStart={(e) => {
+                    e.stopPropagation();
+                    if (e.cancelable) e.preventDefault();
+                    setDraggedPointId(pt.id);
+                    onSelectPoint(pt.id);
+                    setIsPanning(false);
+                  }}
+                  onTouchMove={(e) => {
+                    e.stopPropagation();
+                    if (e.cancelable) e.preventDefault();
+                    if (e.touches.length >= 1) {
+                      const t = e.touches[0];
+                      const { x: rawPx, y: rawPy } = getSvgCursorPoint(t);
+                      const [tdb, w] = pixelToCoord(rawPx, rawPy);
+                      onUpdatePointCoordinates(pt.id, tdb, Math.max(0, w));
+                    }
+                  }}
+                  onTouchEnd={(e) => {
+                    e.stopPropagation();
+                    setDraggedPointId(null);
+                  }}
+                  onTouchCancel={(e) => {
+                    e.stopPropagation();
+                    setDraggedPointId(null);
                   }}
                   onContextMenu={(e) => {
                     e.preventDefault();
@@ -2424,6 +4092,28 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
                     });
                   }}
                 >
+                  {/* Invisible hit-target buffer circle (48px diameter for smooth touchscreen fingers interaction) */}
+                  <circle
+                    r="24"
+                    fill="transparent"
+                    className="cursor-grab active:cursor-grabbing"
+                    style={{ touchAction: 'none' }}
+                  />
+
+                  {/* Active dragging tactile halo */}
+                  {draggedPointId === pt.id && (
+                    <circle
+                      r="20"
+                      fill={pt.color}
+                      fillOpacity="0.25"
+                      stroke={pt.color}
+                      strokeWidth="1.5"
+                      strokeDasharray="4,2"
+                      className="animate-spin"
+                      style={{ transformOrigin: '0 0', animationDuration: '3s' }}
+                    />
+                  )}
+
                   {isSelected && (
                     <circle
                       r="13"
@@ -2446,10 +4136,10 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
             })}
 
             {/* 2. Anti-collision Point Labels and Leaders (Never overlap each other, lines, or points) */}
-            {layers.pointLabels &&
+            {layers.pointLabels && labelMode !== 'none' &&
               labelLayout.placedPointLabels.map((lbl) => {
                 const pt = points.find((p) => p.id === lbl.pointId);
-                if (!pt) return null;
+                if (!pt || pt.hidden) return null;
                 const isPtIsolated = isPointIsolated(pt.id);
                 if (hasActiveIsolation && !isPtIsolated && !dimOtherProcesses) {
                   return null;
@@ -2509,16 +4199,16 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
                         strokeWidth={isSelected ? '2' : '1.2'}
                         filter={themeStyles.isDark ? 'drop-shadow(0 2px 4px rgba(0,0,0,0.7))' : 'drop-shadow(0 1px 3px rgba(0,0,0,0.12))'}
                       />
-                      <circle cx="8" cy={lbl.height / 2} r="3" fill={pt.color} />
+                      <circle cx="7" cy={lbl.height / 2} r="2.5" fill={pt.color} />
                       <text
-                        x="16"
+                        x="13"
                         y={lbl.height / 2 + 3.5}
                         fill={themeStyles.isDark ? '#F8FAFC' : '#0F172A'}
                         fontSize="9.5"
                         fontWeight="bold"
-                        fontFamily="Plus Jakarta Sans, sans-serif"
+                        fontFamily="JetBrains Mono, monospace"
                       >
-                        {pt.name}
+                        {getPointDesignation(pt.name)}
                       </text>
                     </g>
                   </g>
@@ -2536,39 +4226,51 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
             const dWdT = getSlopeFromSHR(activeSHR);
             const adp = calculateADP(targetPt.tdb, targetPt.w, activeSHR, pressure);
 
-            // Starting point at ADP on saturation curve
-            const [startX, startY] = adp
-              ? coordToPixel(adp.tdbAdp, adp.wAdp)
-              : coordToPixel(Math.max(-10, targetPt.tdb - 18), Math.max(0, targetPt.w - dWdT * 18));
+            // Starting point at ADP on saturation curve, or zero moisture boundary
+            let startT: number;
+            let startW: number;
+            if (adp) {
+              startT = adp.tdbAdp;
+              startW = adp.wAdp;
+            } else {
+              const tZero = targetPt.tdb - targetPt.w / dWdT;
+              startT = Math.max(-10, tZero);
+              startW = Math.max(0, targetPt.w - dWdT * (targetPt.tdb - startT));
+            }
 
-            // Extend towards warmer temperatures
-            const tHigh = Math.min(50, targetPt.tdb + 12);
+            const [startX, startY] = coordToPixel(startT, startW);
+            const [targetX, targetY] = coordToPixel(targetPt.tdb, targetPt.w);
+
+            // Extend towards warmer space condition zone
+            const tHigh = Math.min(50, targetPt.tdb + 14);
             const wHigh = targetPt.w + dWdT * (tHigh - targetPt.tdb);
             const [endX, endY] = coordToPixel(tHigh, Math.max(0, wHigh));
-            const [targetX, targetY] = coordToPixel(targetPt.tdb, targetPt.w);
 
             return (
               <g className="shr-maneuver-rcl pointer-events-none">
-                {/* Dashed guideline: complete Recta de Maniobra */}
+                {/* Complete Recta de Maniobra guideline */}
                 <line
                   x1={startX}
                   y1={startY}
                   x2={endX}
                   y2={endY}
                   stroke="#F59E0B"
-                  strokeWidth="2.2"
+                  strokeWidth="2"
                   strokeDasharray="6,4"
+                  opacity="0.85"
                 />
 
                 {/* Solid emphasis line connecting ADP directly to the active room state point */}
-                <line
-                  x1={startX}
-                  y1={startY}
-                  x2={targetX}
-                  y2={targetY}
-                  stroke="#F59E0B"
-                  strokeWidth="3.2"
-                />
+                {adp && (
+                  <line
+                    x1={startX}
+                    y1={startY}
+                    x2={targetX}
+                    y2={targetY}
+                    stroke="#F59E0B"
+                    strokeWidth="3.2"
+                  />
+                )}
 
                 {/* Room Target Point Highlight */}
                 <circle cx={targetX} cy={targetY} r="5" fill="#F59E0B" />
@@ -2579,7 +4281,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
                   <rect
                     x="-4"
                     y="-11"
-                    width="200"
+                    width="230"
                     height="20"
                     rx="4"
                     fill={themeStyles.isDark ? 'rgba(15,23,42,0.95)' : 'rgba(255,255,255,0.95)'}
@@ -2595,20 +4297,20 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
                     fontWeight="bold"
                     fontFamily="monospace"
                   >
-                    Recta Maniobra SHR={activeSHR.toFixed(2)} · {selectedPointId ? (points.find((p) => p.id === selectedPointId)?.name || 'Punto') : '24°C / 50% HR'}
+                    Recta Maniobra SHR={activeSHR.toFixed(2)} · {targetPt.name}
                   </text>
                 </g>
 
-                {/* Apparatus Dew Point (ADP / Punto de Rocío del Aparato) Badge on saturation curve */}
-                {adp && (
+                {/* Apparatus Dew Point (ADP) Badge or No-Intersection Advisory */}
+                {adp ? (
                   <g transform={`translate(${startX}, ${startY})`}>
                     <circle r="5" fill="#EF4444" />
-                    <circle r="9" fill="none" stroke="#EF4444" strokeWidth="1.5" strokeDasharray="3,2" />
+                    <circle r="10" fill="none" stroke="#EF4444" strokeWidth="1.5" strokeDasharray="3,2" />
                     <g transform="translate(14, -6)">
                       <rect
                         x="-4"
                         y="-10"
-                        width="168"
+                        width="190"
                         height="20"
                         rx="4"
                         fill={themeStyles.isDark ? 'rgba(15,23,42,0.95)' : 'rgba(254,242,242,0.95)'}
@@ -2617,9 +4319,26 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
                         filter="drop-shadow(0 2px 4px rgba(0,0,0,0.4))"
                       />
                       <text x="6" y="4" fill="#EF4444" fontSize="9" fontWeight="bold" fontFamily="monospace">
-                        ADP: {adp.tdbAdp.toFixed(1)}°C · {(adp.wAdp * 1000).toFixed(1)}g/kg
+                        ADP: {adp.tdbAdp.toFixed(1)}°C · {(adp.wAdp * 1000).toFixed(1)}g/kg · {adp.hAdp.toFixed(1)}kJ/kg
                       </text>
                     </g>
+                  </g>
+                ) : (
+                  <g transform={`translate(${startX + 14}, ${startY - 14})`}>
+                    <rect
+                      x="-4"
+                      y="-10"
+                      width="260"
+                      height="20"
+                      rx="4"
+                      fill={themeStyles.isDark ? 'rgba(30,27,75,0.95)' : 'rgba(254,243,199,0.95)'}
+                      stroke="#F59E0B"
+                      strokeWidth="1.2"
+                      filter="drop-shadow(0 2px 4px rgba(0,0,0,0.4))"
+                    />
+                    <text x="6" y="4" fill="#F59E0B" fontSize="8.5" fontWeight="bold" fontFamily="monospace">
+                      Sin ADP en saturación (requiere poscalentamiento)
+                    </text>
                   </g>
                 )}
               </g>
@@ -2670,31 +4389,37 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
             />
 
             {/* Compact On-Cursor Tag */}
-            <g transform={`translate(${hoverCoords.x + 14}, ${hoverCoords.y - 12})`}>
-              <rect
-                x="0"
-                y="-13"
-                width="142"
-                height="22"
-                rx="4"
-                fill={themeStyles.isDark ? 'rgba(10, 10, 12, 0.94)' : 'rgba(255, 255, 255, 0.95)'}
-                stroke={themeStyles.isDark ? '#38BDF8' : '#0284C7'}
-                strokeWidth="1"
-                filter="drop-shadow(0px 2px 4px rgba(0,0,0,0.35))"
-              />
-              <text
-                x="6"
-                y="1.5"
-                fill={themeStyles.isDark ? '#F8FAFC' : '#0F172A'}
-                fontSize="8.5"
-                fontFamily="Fira Code, monospace"
-                fontWeight="600"
-              >
-                {units === 'IP'
-                  ? `${UnitConvert.cToF(hoverCoords.tdb).toFixed(1)}°F · ${(hoverCoords.w * 7000).toFixed(0)}gr`
-                  : `${hoverCoords.tdb.toFixed(1)}°C · ${(hoverCoords.w * 1000).toFixed(1)}g · ${hoverCoords.rh.toFixed(0)}%`}
-              </text>
-            </g>
+            {labelMode !== 'none' && (
+              <g transform={`translate(${hoverCoords.x + 14}, ${hoverCoords.y - 12})`}>
+                <rect
+                  x="0"
+                  y="-13"
+                  width={labelMode === 'basic' ? "112" : "142"}
+                  height="22"
+                  rx="4"
+                  fill={themeStyles.isDark ? 'rgba(10, 10, 12, 0.94)' : 'rgba(255, 255, 255, 0.95)'}
+                  stroke={themeStyles.isDark ? '#38BDF8' : '#0284C7'}
+                  strokeWidth="1"
+                  filter="drop-shadow(0px 2px 4px rgba(0,0,0,0.35))"
+                />
+                <text
+                  x="6"
+                  y="1.5"
+                  fill={themeStyles.isDark ? '#F8FAFC' : '#0F172A'}
+                  fontSize="8.5"
+                  fontFamily="Fira Code, monospace"
+                  fontWeight="600"
+                >
+                  {labelMode === 'basic'
+                    ? (units === 'IP'
+                        ? `${UnitConvert.cToF(hoverCoords.tdb).toFixed(1)}°F · ${(hoverCoords.w * 7000).toFixed(0)}gr`
+                        : `${hoverCoords.tdb.toFixed(1)}°C · ${(hoverCoords.w * 1000).toFixed(1)} g/kg`)
+                    : (units === 'IP'
+                        ? `${UnitConvert.cToF(hoverCoords.tdb).toFixed(1)}°F · ${(hoverCoords.w * 7000).toFixed(0)}gr`
+                        : `${hoverCoords.tdb.toFixed(1)}°C · ${(hoverCoords.w * 1000).toFixed(1)}g · ${hoverCoords.rh.toFixed(0)}%`)}
+                </text>
+              </g>
+            )}
           </g>
         )}
 
@@ -2768,7 +4493,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
                 </text>
 
                 {/* Dynamic Cursor Indicator on Bottom Axis */}
-                {hoverCoords && !isPanning && hoverCoords.x >= margin.left && hoverCoords.x <= margin.left + plotWidth && (
+                {hoverCoords && !isPanning && labelMode !== 'none' && hoverCoords.x >= margin.left && hoverCoords.x <= margin.left + plotWidth && (
                   <g className="cursor-indicator-x">
                     <polygon
                       points={`${hoverCoords.x},${margin.top + plotHeight} ${hoverCoords.x - 4},${margin.top + plotHeight + 6} ${hoverCoords.x + 4},${margin.top + plotHeight + 6}`}
@@ -2852,7 +4577,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
                 </text>
 
                 {/* Dynamic Cursor Indicator on Right Axis */}
-                {hoverCoords && !isPanning && hoverCoords.y >= margin.top && hoverCoords.y <= margin.top + plotHeight && (
+                {hoverCoords && !isPanning && labelMode !== 'none' && hoverCoords.y >= margin.top && hoverCoords.y <= margin.top + plotHeight && (
                   <g className="cursor-indicator-y">
                     <polygon
                       points={`${margin.left + plotWidth},${hoverCoords.y} ${margin.left + plotWidth + 6},${hoverCoords.y - 4} ${margin.left + plotWidth + 6},${hoverCoords.y + 4}`}
@@ -2939,7 +4664,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
                 </text>
 
                 {/* Dynamic Cursor Indicator on Left Axis */}
-                {hoverCoords && !isPanning && hoverCoords.y >= margin.top && hoverCoords.y <= margin.top + plotHeight && (
+                {hoverCoords && !isPanning && labelMode !== 'none' && hoverCoords.y >= margin.top && hoverCoords.y <= margin.top + plotHeight && (
                   <g className="cursor-indicator-mollier-t">
                     <polygon
                       points={`${margin.left},${hoverCoords.y} ${margin.left - 6},${hoverCoords.y - 4} ${margin.left - 6},${hoverCoords.y + 4}`}
@@ -3022,7 +4747,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
                 </text>
 
                 {/* Dynamic Cursor Indicator on Top Axis */}
-                {hoverCoords && !isPanning && hoverCoords.x >= margin.left && hoverCoords.x <= margin.left + plotWidth && (
+                {hoverCoords && !isPanning && labelMode !== 'none' && hoverCoords.x >= margin.left && hoverCoords.x <= margin.left + plotWidth && (
                   <g className="cursor-indicator-mollier-w">
                     <polygon
                       points={`${hoverCoords.x},${margin.top} ${hoverCoords.x - 4},${margin.top - 6} ${hoverCoords.x + 4},${margin.top - 6}`}
@@ -3057,11 +4782,32 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
         </g>
       </svg>
 
-      {/* Bottom Panning and Context Menu Hint */}
-      <div className="absolute bottom-2 left-4 z-10 hidden sm:flex items-center gap-1.5 text-[10px] text-slate-500 font-mono pointer-events-none">
-        <Move className="w-3 h-3 text-cyan-400" />
-        <span>Arrastra para mover · Rueda para zoom · Clic dcho. en puntos/procesos para menú contextual</span>
+      {/* Bottom Panning, Navigation and Keyboard Movement Hint */}
+      <div className="absolute bottom-2 left-4 z-10 hidden sm:flex items-center gap-1.5 text-[10px] text-slate-400 font-mono pointer-events-none bg-black/60 backdrop-blur-sm px-2 py-0.5 rounded-md border border-white/5">
+        <Move className="w-3 h-3 text-cyan-400 shrink-0" />
+        <span>
+          {selectedPointId
+            ? '🎯 Punto seleccionado: Usa las flechas (← ↑ → ↓) para mover con precisión (0.1° / 0.1g · Shift: 0.5 · Alt: 0.01) · Esc para deseleccionar'
+            : 'Arrastra para mover · Rueda para zoom · Selecciona un punto y usa flechas (← ↑ → ↓) para ajuste fino'}
+        </span>
       </div>
+
+      {/* Whiteboard Annotation Overlay for Interactive Whiteboard (PDI) */}
+      {showWhiteboard && (
+        <WhiteboardAnnotationOverlay
+          containerRef={chartContainerRef}
+          isProjectorHighContrast={projectorHighContrast}
+          onZoomIn={handleZoomIn}
+          onZoomOut={handleZoomOut}
+          onZoom100={handleSetZoom100}
+          currentZoom={Math.round((viewBoxWidth / viewBox.width) * 100)}
+          onCenterDiagram={handleCenterDiagram}
+          onResetBounds={handleResetBounds}
+          isPanZoomLocked={isPanZoomLocked}
+          onTogglePanZoomLocked={togglePanZoomLocked}
+          onClose={() => setShowWhiteboard(false)}
+        />
+      )}
 
       {/* Context Menu (Right-click on Points, Processes, or Canvas) */}
       {contextMenu && (
@@ -3074,7 +4820,7 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
           onSelectPoint={onSelectPoint}
           onCenterPoint={handleCenterPoint}
           onCenterProcess={handleCenterProcess}
-          onZoomAll={handleZoomAll}
+          onZoomAll={handleSetZoom100}
           onCenterCycle={handleCenterCycle}
           onResetBounds={handleResetBounds}
           onAddPointAtCoordinates={onAddPointAtCoordinates}
@@ -3091,6 +4837,10 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
           onToggleEnthalpyDeviations={() => setShowEnthalpyDeviations(!showEnthalpyDeviations)}
           onLocateModuleInAhu={onLocateModuleInAhu}
           isSplitView={isSplitView}
+          isPanZoomLocked={isPanZoomLocked}
+          onTogglePanZoomLock={togglePanZoomLocked}
+          onToggleFixParam={handleTogglePointFixParam}
+          onClearFixedParams={handleClearPointFixedParams}
         />
       )}
     </div>

@@ -1,26 +1,32 @@
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { UnitSystem, ChartType } from '../types/psychrometrics';
 import {
   Download,
-  Settings,
   Layers,
   Sparkles,
-  RotateCcw,
-  Sliders,
   FileSpreadsheet,
   AirVent,
   ShieldCheck,
   LineChart,
-  Compass,
   Activity,
   Wind,
   PanelLeftOpen,
   PanelLeftClose,
+  GraduationCap,
+  Snowflake,
+  Shuffle,
+  Target,
+  Wrench,
+  Search,
+  ChevronDown,
+  Compass,
+  Gauge,
+  Sliders,
 } from 'lucide-react';
 
 interface TopBarProps {
-  currentView: 'chart' | 'points' | 'processes' | 'comfort' | 'schematic';
-  onChangeView: (view: 'chart' | 'points' | 'processes' | 'comfort' | 'schematic') => void;
+  currentView: 'chart' | 'points' | 'processes' | 'comfort' | 'schematic' | 'teaching';
+  onChangeView: (view: 'chart' | 'points' | 'processes' | 'comfort' | 'schematic' | 'teaching') => void;
   chartType: ChartType;
   onChangeChartType: (type: ChartType) => void;
   units: UnitSystem;
@@ -34,6 +40,12 @@ interface TopBarProps {
   onOpenIdaeModal?: () => void;
   isSidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
+  activeConditionName?: string;
+  onOpenConditionsModal?: () => void;
+  onOpenCoilModelerModal?: () => void;
+  onOpenAirMixingModal?: () => void;
+  onOpenShrModal?: () => void;
+  onOpenCommandPalette?: () => void;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -52,11 +64,36 @@ export const TopBar: React.FC<TopBarProps> = ({
   onOpenIdaeModal,
   isSidebarCollapsed,
   onToggleSidebar,
+  activeConditionName,
+  onOpenConditionsModal,
+  onOpenCoilModelerModal,
+  onOpenAirMixingModal,
+  onOpenShrModal,
+  onOpenCommandPalette,
 }) => {
+  const [isToolsMenuOpen, setIsToolsMenuOpen] = useState(false);
+  const [isChartTypeDropdownOpen, setIsChartTypeDropdownOpen] = useState(false);
+  const toolsMenuRef = useRef<HTMLDivElement>(null);
+  const chartDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close menus on outside click
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (toolsMenuRef.current && !toolsMenuRef.current.contains(event.target as Node)) {
+        setIsToolsMenuOpen(false);
+      }
+      if (chartDropdownRef.current && !chartDropdownRef.current.contains(event.target as Node)) {
+        setIsChartTypeDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   return (
-    <header className="h-12 bg-[#0a0a0c]/90 backdrop-blur-md border-b border-[rgba(255,255,255,0.1)] px-3 sm:px-4 flex items-center justify-between shrink-0 select-none z-30 font-primary">
-      {/* Zone 1: Brand title, one line wordmark */}
-      <div className="flex items-center gap-2">
+    <header className="h-12 bg-[#0a0a0c]/95 backdrop-blur-md border-b border-[rgba(255,255,255,0.1)] px-2.5 sm:px-4 flex items-center justify-between shrink-0 select-none z-30 font-primary">
+      {/* Zone 1: Logo & Brand + Quick Search Pill */}
+      <div className="flex items-center gap-2 lg:gap-3 shrink-0">
         {onToggleSidebar && (
           <button
             type="button"
@@ -71,164 +108,429 @@ export const TopBar: React.FC<TopBarProps> = ({
             )}
           </button>
         )}
-        <div className="w-7 h-7 rounded-[5px] bg-[#fbbf24] text-black flex items-center justify-center font-bold text-sm shadow-[0_0_8px_rgba(251,191,36,0.3)]">
-          Ψ
+
+        <div className="flex items-center gap-2 cursor-pointer" onClick={() => onChangeView('chart')}>
+          <div className="w-7 h-7 rounded-[6px] bg-[#fbbf24] text-black flex items-center justify-center font-bold text-sm shadow-[0_0_10px_rgba(251,191,36,0.35)]">
+            Ψ
+          </div>
+          <span className="text-[14px] sm:text-[15px] font-bold tracking-tight text-white hidden sm:inline">
+            PsychroStudio <span className="text-[#fbbf24] font-normal text-xs ml-0.5 font-mono">PRO</span>
+          </span>
         </div>
-        <span className="text-[15px] font-bold tracking-tight text-white">
-          PsychroStudio <span className="text-[#fbbf24] font-normal text-xs ml-0.5 font-mono">PRO</span>
-        </span>
+
+        {/* Global Command Palette / Quick Search Trigger */}
+        {onOpenCommandPalette && (
+          <button
+            type="button"
+            onClick={onOpenCommandPalette}
+            className="flex items-center gap-2 px-2.5 py-1 text-xs text-slate-400 bg-white/5 hover:bg-white/10 hover:text-slate-200 rounded-lg border border-white/10 transition-all cursor-pointer group ml-1"
+            title="Abrir buscador global de vistas, cálculos y puntos (Ctrl+K / ⌘K)"
+          >
+            <Search className="w-3.5 h-3.5 text-[#fbbf24] group-hover:scale-110 transition-transform" />
+            <span className="hidden xl:inline text-slate-300">Buscar vista o cálculo...</span>
+            <span className="hidden sm:inline font-mono text-[10px] bg-black/40 text-slate-400 px-1.5 py-0.5 rounded border border-white/10">
+              ⌘K
+            </span>
+          </button>
+        )}
       </div>
 
-      {/* Zone 2: Navigation Links / Primary View Modes with Semantic Colors and Active Yellow */}
-      <nav className="hidden md:flex items-center gap-1.5 p-1 bg-[#141416] rounded-xl border border-white/10">
-        {/* 1. Esquema Físico & UTA (Default / Position 1) */}
+      {/* Zone 2: Primary Workspaces / Navigation Tabs */}
+      <nav className="hidden md:flex items-center gap-1 p-0.5 bg-[#141416] rounded-xl border border-white/10 max-w-full overflow-x-auto">
+        {/* 1. Diagrama Psicrométrico with Integrated Carrier / Mollier Selector */}
+        <div className="relative" ref={chartDropdownRef}>
+          <div
+            className={`flex items-center rounded-lg transition-all text-xs font-bold ${
+              currentView === 'chart'
+                ? 'bg-[#fbbf24] text-black shadow-[0_0_12px_rgba(251,191,36,0.3)]'
+                : 'text-slate-300 hover:text-white hover:bg-white/5'
+            }`}
+          >
+            <button
+              onClick={() => onChangeView('chart')}
+              className="px-2.5 py-1.5 flex items-center gap-1.5 cursor-pointer"
+              title="Ver Diagrama Psicrométrico"
+            >
+              <LineChart className="w-3.5 h-3.5 shrink-0" />
+              <span>Diagrama {chartType === 'mollier' ? '(Mollier)' : '(Carrier)'}</span>
+            </button>
+            <button
+              onClick={() => setIsChartTypeDropdownOpen((prev) => !prev)}
+              className={`p-1.5 pr-2 rounded-r-lg hover:bg-black/10 transition-colors cursor-pointer border-l ${
+                currentView === 'chart' ? 'border-black/20 text-black' : 'border-white/10 text-slate-400'
+              }`}
+              title="Cambiar proyección psicrométrica (Carrier ASHRAE vs Mollier h-x)"
+            >
+              <ChevronDown className="w-3 h-3" />
+            </button>
+          </div>
+
+          {/* Carrier vs Mollier dropdown popover */}
+          {isChartTypeDropdownOpen && (
+            <div className="absolute top-full left-0 mt-1.5 w-52 bg-[#18191d] border border-white/15 rounded-xl shadow-2xl p-1.5 z-50 text-slate-200">
+              <button
+                onClick={() => {
+                  onChangeView('chart');
+                  onChangeChartType('carrier');
+                  setIsChartTypeDropdownOpen(false);
+                }}
+                className={`w-full flex items-center justify-between p-2 rounded-lg text-left text-xs transition-colors cursor-pointer ${
+                  chartType === 'carrier' && currentView === 'chart'
+                    ? 'bg-[#fbbf24]/20 text-[#fbbf24] font-bold border border-[#fbbf24]/30'
+                    : 'hover:bg-white/5 text-slate-300'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <LineChart className="w-3.5 h-3.5 text-emerald-400" />
+                  <div>
+                    <div className="font-semibold">Carrier / ASHRAE</div>
+                    <div className="text-[10px] text-slate-400">Tdb horizontal, w vertical</div>
+                  </div>
+                </div>
+                {chartType === 'carrier' && <span className="text-[10px] font-mono font-bold">✓</span>}
+              </button>
+
+              <button
+                onClick={() => {
+                  onChangeView('chart');
+                  onChangeChartType('mollier');
+                  setIsChartTypeDropdownOpen(false);
+                }}
+                className={`w-full flex items-center justify-between p-2 rounded-lg text-left text-xs transition-colors cursor-pointer mt-1 ${
+                  chartType === 'mollier' && currentView === 'chart'
+                    ? 'bg-[#fbbf24]/20 text-[#fbbf24] font-bold border border-[#fbbf24]/30'
+                    : 'hover:bg-white/5 text-slate-300'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <Compass className="w-3.5 h-3.5 text-indigo-400" />
+                  <div>
+                    <div className="font-semibold">Mollier h-x</div>
+                    <div className="text-[10px] text-slate-400">Eje entálpico oblicuo (DIN)</div>
+                  </div>
+                </div>
+                {chartType === 'mollier' && <span className="text-[10px] font-mono font-bold">✓</span>}
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* 2. Esquema Físico & UTA */}
         <button
           onClick={() => onChangeView('schematic')}
-          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer select-none ${
+          className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
             currentView === 'schematic'
-              ? 'bg-[#fbbf24] text-black font-extrabold shadow-[0_0_14px_rgba(251,191,36,0.35)] border border-[#fbbf24]'
-              : 'text-[#38bdf8] bg-[#0284c7]/15 border border-[#38bdf8]/35 hover:bg-[#0284c7]/25 hover:border-[#38bdf8]/60 hover:text-white'
+              ? 'bg-[#fbbf24] text-black shadow-[0_0_12px_rgba(251,191,36,0.3)]'
+              : 'text-slate-300 hover:text-white hover:bg-white/5'
           }`}
+          title="Esquema físico del climatizador y componentes UTA"
         >
-          <AirVent className="w-3.5 h-3.5 text-current shrink-0" />
-          <span>Esquema Físico & UTA</span>
-        </button>
-
-        {/* 2. Diagrama Psicrométrico (Carrier / Position 2) */}
-        <button
-          onClick={() => {
-            onChangeView('chart');
-            onChangeChartType('carrier');
-          }}
-          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer select-none ${
-            currentView === 'chart' && chartType === 'carrier'
-              ? 'bg-[#fbbf24] text-black font-extrabold shadow-[0_0_14px_rgba(251,191,36,0.35)] border border-[#fbbf24]'
-              : 'text-[#34d399] bg-[#059669]/15 border border-[#34d399]/35 hover:bg-[#059669]/25 hover:border-[#34d399]/60 hover:text-white'
-          }`}
-        >
-          <LineChart className="w-3.5 h-3.5 text-current shrink-0" />
-          <span>Diagrama Psicrométrico</span>
+          <AirVent className="w-3.5 h-3.5 shrink-0 text-[#38bdf8]" />
+          <span>Esquema UTA</span>
         </button>
 
         {/* 3. Tabla de Puntos */}
         <button
           onClick={() => onChangeView('points')}
-          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer select-none ${
+          className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
             currentView === 'points'
-              ? 'bg-[#fbbf24] text-black font-extrabold shadow-[0_0_14px_rgba(251,191,36,0.35)] border border-[#fbbf24]'
-              : 'text-[#fb923c] bg-[#ea580c]/15 border border-[#fb923c]/35 hover:bg-[#ea580c]/25 hover:border-[#fb923c]/60 hover:text-white'
+              ? 'bg-[#fbbf24] text-black shadow-[0_0_12px_rgba(251,191,36,0.3)]'
+              : 'text-slate-300 hover:text-white hover:bg-white/5'
           }`}
+          title="Tabla de estados psicrométricos"
         >
-          <FileSpreadsheet className="w-3.5 h-3.5 text-current shrink-0" />
-          <span>Tabla de Puntos</span>
+          <FileSpreadsheet className="w-3.5 h-3.5 shrink-0 text-[#fb923c]" />
+          <span>Puntos</span>
         </button>
 
         {/* 4. Procesos & Balances */}
         <button
           onClick={() => onChangeView('processes')}
-          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer select-none ${
+          className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
             currentView === 'processes'
-              ? 'bg-[#fbbf24] text-black font-extrabold shadow-[0_0_14px_rgba(251,191,36,0.35)] border border-[#fbbf24]'
-              : 'text-[#c084fc] bg-[#9333ea]/15 border border-[#c084fc]/35 hover:bg-[#9333ea]/25 hover:border-[#c084fc]/60 hover:text-white'
+              ? 'bg-[#fbbf24] text-black shadow-[0_0_12px_rgba(251,191,36,0.3)]'
+              : 'text-slate-300 hover:text-white hover:bg-white/5'
           }`}
+          title="Balances de energía y transformaciones térmicas"
         >
-          <Activity className="w-3.5 h-3.5 text-current shrink-0" />
-          <span>Procesos & Balances</span>
+          <Activity className="w-3.5 h-3.5 shrink-0 text-[#c084fc]" />
+          <span>Procesos</span>
         </button>
 
-        {/* 5. Confort & Calidad Aire (IAQ) */}
+        {/* 5. Confort & Calidad Aire */}
         <button
           onClick={() => onChangeView('comfort')}
-          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer select-none ${
+          className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
             currentView === 'comfort'
-              ? 'bg-[#fbbf24] text-black font-extrabold shadow-[0_0_14px_rgba(251,191,36,0.35)] border border-[#fbbf24]'
-              : 'text-[#a3e635] bg-[#65a30d]/15 border border-[#a3e635]/35 hover:bg-[#65a30d]/25 hover:border-[#a3e635]/60 hover:text-white'
+              ? 'bg-[#fbbf24] text-black shadow-[0_0_12px_rgba(251,191,36,0.3)]'
+              : 'text-slate-300 hover:text-white hover:bg-white/5'
           }`}
+          title="Zonas bioclimáticas Givoni y Calidad de Aire Interior"
         >
-          <Wind className="w-3.5 h-3.5 text-current shrink-0" />
-          <span>Confort & Calidad Aire (IAQ)</span>
+          <Wind className="w-3.5 h-3.5 shrink-0 text-[#a3e635]" />
+          <span className="hidden lg:inline">Confort & IAQ</span>
+          <span className="lg:hidden">Confort</span>
         </button>
 
-        {/* 6. Diagrama Mollier h-x (Position 6) */}
+        {/* 6. Aula Docente */}
         <button
-          onClick={() => {
-            onChangeView('chart');
-            onChangeChartType('mollier');
-          }}
-          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer select-none ${
-            currentView === 'chart' && chartType === 'mollier'
-              ? 'bg-[#fbbf24] text-black font-extrabold shadow-[0_0_14px_rgba(251,191,36,0.35)] border border-[#fbbf24]'
-              : 'text-[#818cf8] bg-[#4f46e5]/15 border border-[#818cf8]/35 hover:bg-[#4f46e5]/25 hover:border-[#818cf8]/60 hover:text-white'
+          onClick={() => onChangeView('teaching')}
+          className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+            currentView === 'teaching'
+              ? 'bg-[#fbbf24] text-black shadow-[0_0_12px_rgba(251,191,36,0.3)]'
+              : 'text-[#f59e0b] hover:text-white hover:bg-white/5'
           }`}
+          title="Aula interactiva paso a paso"
         >
-          <Compass className="w-3.5 h-3.5 text-current shrink-0" />
-          <span>Diagrama Mollier h-x</span>
+          <GraduationCap className="w-3.5 h-3.5 shrink-0 text-[#f59e0b]" />
+          <span>Aula</span>
         </button>
       </nav>
 
-      {/* Zone 3: Primary Actions & Calibration Bar */}
-      <div className="flex items-center gap-2">
-        {/* Presets button */}
-        <button
-          onClick={onOpenPresetsModal}
-          className="btn-secondary text-[12px] whitespace-nowrap"
-          title="Cargar ciclos HVAC predefinidos"
-        >
-          <Layers className="w-3.5 h-3.5 text-[#fbbf24]" />
-          <span>Ciclos HVAC</span>
-        </button>
-
-        {/* IDAE Compliance Audit button */}
-        {onOpenIdaeModal && (
+      {/* Zone 3: Consolidated Tools Hub + Atmosphere/Units + Export CTA */}
+      <div className="flex items-center gap-1.5 sm:gap-2">
+        {/* Consolidated Tools & Calculations Dropdown (Replaces 6 dense separate buttons) */}
+        <div className="relative" ref={toolsMenuRef}>
           <button
-            onClick={onOpenIdaeModal}
-            className="btn-secondary text-[12px] whitespace-nowrap !border-[#65a30d]/40 !text-[#a3e635] hover:!border-[#a3e635]"
-            title="Auditoría de conformidad según la Guía Técnica IDAE de Equipos Autónomos (ATECYR / RITE)"
+            type="button"
+            onClick={() => setIsToolsMenuOpen((prev) => !prev)}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-all cursor-pointer ${
+              isToolsMenuOpen
+                ? 'bg-[#fbbf24]/15 border-[#fbbf24] text-[#fbbf24]'
+                : 'bg-white/5 hover:bg-white/10 border-white/15 text-slate-200 hover:text-white'
+            }`}
+            title="Herramientas termodinámicas, cálculos OTS, ciclos y auditoría"
           >
-            <ShieldCheck className="w-3.5 h-3.5 text-[#a3e635]" />
-            <span className="hidden sm:inline">Auditoría IDAE</span>
+            <Wrench className="w-3.5 h-3.5 text-[#fbbf24]" />
+            <span className="font-medium">Herramientas</span>
+            <ChevronDown className={`w-3 h-3 text-slate-400 transition-transform ${isToolsMenuOpen ? 'rotate-180 text-[#fbbf24]' : ''}`} />
+          </button>
+
+          {/* Tools Menu Popover */}
+          {isToolsMenuOpen && (
+            <div className="absolute right-0 top-full mt-2 w-80 bg-[#16171b] border border-white/15 rounded-2xl shadow-2xl p-2 z-50 text-slate-200 divide-y divide-white/10 animate-in fade-in zoom-in-95 duration-100">
+              {/* Section 1: Thermodynamic Modeler (OTS C, D, E) */}
+              <div className="py-1">
+                <div className="px-2.5 py-1 text-[10px] font-mono uppercase tracking-wider text-slate-400">
+                  Cálculos Termodinámicos (OTS)
+                </div>
+
+                {onOpenCoilModelerModal && (
+                  <button
+                    onClick={() => {
+                      setIsToolsMenuOpen(false);
+                      onOpenCoilModelerModal();
+                    }}
+                    className="w-full flex items-start gap-2.5 p-2 rounded-xl hover:bg-white/5 text-left transition-colors cursor-pointer group"
+                  >
+                    <div className="p-1.5 rounded-lg bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 group-hover:scale-105 transition-transform shrink-0 mt-0.5">
+                      <Snowflake className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-white group-hover:text-cyan-300 flex items-center gap-1.5">
+                        Simulador Batería & ADP
+                        <span className="text-[9px] font-mono px-1 py-0.2 bg-cyan-500/20 text-cyan-300 rounded border border-cyan-500/30">C</span>
+                      </div>
+                      <div className="text-[11px] text-slate-400 leading-tight mt-0.5">
+                        Punto de rocío del aparato, bypass factor, condensados y riesgo de escarcha.
+                      </div>
+                    </div>
+                  </button>
+                )}
+
+                {onOpenAirMixingModal && (
+                  <button
+                    onClick={() => {
+                      setIsToolsMenuOpen(false);
+                      onOpenAirMixingModal();
+                    }}
+                    className="w-full flex items-start gap-2.5 p-2 rounded-xl hover:bg-white/5 text-left transition-colors cursor-pointer group"
+                  >
+                    <div className="p-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 group-hover:scale-105 transition-transform shrink-0 mt-0.5">
+                      <Shuffle className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-white group-hover:text-amber-300 flex items-center gap-1.5">
+                        Mezcla de Corrientes
+                        <span className="text-[9px] font-mono px-1 py-0.2 bg-amber-500/20 text-amber-300 rounded border border-amber-500/30">D</span>
+                      </div>
+                      <div className="text-[11px] text-slate-400 leading-tight mt-0.5">
+                        Repartición de caudales, balance entálpico, economizador y niebla.
+                      </div>
+                    </div>
+                  </button>
+                )}
+
+                {onOpenShrModal && (
+                  <button
+                    onClick={() => {
+                      setIsToolsMenuOpen(false);
+                      onOpenShrModal();
+                    }}
+                    className="w-full flex items-start gap-2.5 p-2 rounded-xl hover:bg-white/5 text-left transition-colors cursor-pointer group"
+                  >
+                    <div className="p-1.5 rounded-lg bg-purple-500/10 border border-purple-500/20 text-purple-400 group-hover:scale-105 transition-transform shrink-0 mt-0.5">
+                      <Target className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-white group-hover:text-purple-300 flex items-center gap-1.5">
+                        Líneas SHR & Cargas Local
+                        <span className="text-[9px] font-mono px-1 py-0.2 bg-purple-500/20 text-purple-300 rounded border border-purple-500/30">E</span>
+                      </div>
+                      <div className="text-[11px] text-slate-400 leading-tight mt-0.5">
+                        Factor de calor sensible, caudal requerido e impulsión.
+                      </div>
+                    </div>
+                  </button>
+                )}
+              </div>
+
+              {/* Section 2: Scenarios & Presets */}
+              <div className="py-1">
+                <div className="px-2.5 py-1 text-[10px] font-mono uppercase tracking-wider text-slate-400">
+                  Ciclos & Escenarios
+                </div>
+
+                {onOpenConditionsModal && (
+                  <button
+                    onClick={() => {
+                      setIsToolsMenuOpen(false);
+                      onOpenConditionsModal();
+                    }}
+                    className="w-full flex items-start gap-2.5 p-2 rounded-xl hover:bg-white/5 text-left transition-colors cursor-pointer group"
+                  >
+                    <div className="p-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 group-hover:scale-105 transition-transform shrink-0 mt-0.5">
+                      <Layers className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-white group-hover:text-amber-300 flex items-center gap-1.5">
+                        Escenarios Operativos
+                        <span className="text-[9px] font-mono px-1 py-0.2 bg-amber-500/20 text-amber-300 rounded border border-amber-500/30">A</span>
+                      </div>
+                      <div className="text-[11px] text-slate-400 leading-tight mt-0.5">
+                        Activo: <span className="text-amber-300 font-semibold">{activeConditionName || 'Predeterminado'}</span>
+                      </div>
+                    </div>
+                  </button>
+                )}
+
+                <button
+                  onClick={() => {
+                    setIsToolsMenuOpen(false);
+                    onOpenPresetsModal();
+                  }}
+                  className="w-full flex items-start gap-2.5 p-2 rounded-xl hover:bg-white/5 text-left transition-colors cursor-pointer group"
+                >
+                  <div className="p-1.5 rounded-lg bg-yellow-500/10 border border-yellow-500/20 text-yellow-400 group-hover:scale-105 transition-transform shrink-0 mt-0.5">
+                    <Sliders className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-white group-hover:text-yellow-300">
+                      Ciclos HVAC Predefinidos
+                    </div>
+                    <div className="text-[11px] text-slate-400 leading-tight mt-0.5">
+                      Cargar transformaciones de verano, invierno, UTA todo aire y desecante.
+                    </div>
+                  </div>
+                </button>
+              </div>
+
+              {/* Section 3: Compliance & AI */}
+              <div className="py-1">
+                <div className="px-2.5 py-1 text-[10px] font-mono uppercase tracking-wider text-slate-400">
+                  Normativa & Auditoría
+                </div>
+
+                {onOpenIdaeModal && (
+                  <button
+                    onClick={() => {
+                      setIsToolsMenuOpen(false);
+                      onOpenIdaeModal();
+                    }}
+                    className="w-full flex items-start gap-2.5 p-2 rounded-xl hover:bg-white/5 text-left transition-colors cursor-pointer group"
+                  >
+                    <div className="p-1.5 rounded-lg bg-lime-500/10 border border-lime-500/20 text-lime-400 group-hover:scale-105 transition-transform shrink-0 mt-0.5">
+                      <ShieldCheck className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-white group-hover:text-lime-300">
+                        Auditoría IDAE / RITE
+                      </div>
+                      <div className="text-[11px] text-slate-400 leading-tight mt-0.5">
+                        Conformidad según Guía Técnica de Equipos Autónomos ATECYR.
+                      </div>
+                    </div>
+                  </button>
+                )}
+
+                <button
+                  onClick={() => {
+                    setIsToolsMenuOpen(false);
+                    onOpenAiAssistant();
+                  }}
+                  className="w-full flex items-start gap-2.5 p-2 rounded-xl hover:bg-white/5 text-left transition-colors cursor-pointer group"
+                >
+                  <div className="p-1.5 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-400 group-hover:scale-105 transition-transform shrink-0 mt-0.5">
+                    <Sparkles className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-white group-hover:text-blue-300">
+                      Diagnóstico Termodinámico IA
+                    </div>
+                    <div className="text-[11px] text-slate-400 leading-tight mt-0.5">
+                      Inspección asistida de anomalías térmicas y puntos de rocío.
+                    </div>
+                  </div>
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Active Scenario Quick Indicator */}
+        {onOpenConditionsModal && activeConditionName && (
+          <button
+            onClick={onOpenConditionsModal}
+            className="hidden xl:flex items-center gap-1.5 px-2.5 py-1 text-xs text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 rounded-lg border border-amber-500/30 transition-colors cursor-pointer max-w-[140px] truncate"
+            title={`Condición activa: ${activeConditionName}. Clic para cambiar o comparar.`}
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse shrink-0" />
+            <span className="truncate font-semibold">{activeConditionName}</span>
           </button>
         )}
 
-        {/* Altitude / Pressure calibration trigger */}
-        <button
-          onClick={onOpenAtmosphereModal}
-          className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-mono tabular-nums text-[#cbd5e1] bg-[rgba(0,0,0,0.3)] hover:bg-[rgba(255,255,255,0.1)] rounded-[6px] border border-[rgba(255,255,255,0.15)] transition-colors whitespace-nowrap"
-          title="Ajustar altitud y presión atmosférica"
-        >
-          <span className="text-[#94a3b8]">Alt:</span>
-          <span className="text-[#fbbf24] font-semibold">{altitude} m</span>
-          <span className="text-slate-600">·</span>
-          <span className="text-[#f8fafc] font-semibold">{pressure.toFixed(1)} kPa</span>
-        </button>
+        {/* Combined Atmosphere & Units Widget */}
+        <div className="flex items-center rounded-lg border border-white/15 bg-black/40 text-xs overflow-hidden">
+          {/* Barometric Button */}
+          <button
+            onClick={onOpenAtmosphereModal}
+            className="flex items-center gap-1 px-2 py-1.5 text-slate-300 hover:text-white hover:bg-white/10 transition-colors cursor-pointer font-mono tabular-nums"
+            title={`Altitud: ${altitude} m, Presión: ${pressure.toFixed(1)} kPa. Clic para calibrar.`}
+          >
+            <Gauge className="w-3.5 h-3.5 text-[#fbbf24] shrink-0" />
+            <span className="font-semibold">{pressure.toFixed(1)} <span className="text-[10px] text-slate-400">kPa</span></span>
+          </button>
 
-        {/* Unit switcher (SI / IP) */}
-        <button
-          onClick={onToggleUnits}
-          className="px-2.5 py-1.5 text-[12px] font-mono font-bold text-white bg-[rgba(0,0,0,0.3)] hover:bg-[rgba(255,255,255,0.1)] rounded-[6px] border border-[rgba(255,255,255,0.2)] hover:border-[#fbbf24] transition-colors"
-          title="Alternar unidades Sistema Internacional (SI) / Anglosajón (IP)"
-        >
-          {units === 'SI' ? 'SI (°C)' : 'IP (°F)'}
-        </button>
+          <div className="w-px h-4 bg-white/10" />
 
-        {/* AI Assistant button */}
-        <button
-          onClick={onOpenAiAssistant}
-          className="btn-secondary text-[12px] whitespace-nowrap !border-[#3b82f6]/40 !text-[#93c5fd] hover:!border-[#93c5fd]"
-          title="Asistente de diagnóstico termodinámico IA"
-        >
-          <Sparkles className="w-3.5 h-3.5 text-[#93c5fd]" />
-          <span className="hidden lg:inline">Diagnóstico IA</span>
-        </button>
+          {/* Unit Switcher */}
+          <button
+            onClick={onToggleUnits}
+            className="px-2 py-1.5 font-mono font-bold text-white hover:text-[#fbbf24] hover:bg-white/10 transition-colors cursor-pointer"
+            title="Alternar unidades: SI (°C, kJ/kg) vs IP (°F, BTU/lb)"
+          >
+            {units}
+          </button>
+        </div>
 
-        {/* Export / Report button */}
+        {/* Export Button (Primary CTA) */}
         <button
           onClick={onOpenExportModal}
-          className="btn-primary text-[12px] whitespace-nowrap"
-          title="Exportar diagrama, informe o datos CSV"
+          className="btn-primary text-xs py-1.5 px-3 flex items-center gap-1.5 font-bold cursor-pointer shadow-[0_0_12px_rgba(251,191,36,0.25)]"
+          title="Exportar diagrama en alta resolución, informe técnico o datos CSV"
         >
           <Download className="w-3.5 h-3.5" />
-          <span>Exportar</span>
+          <span className="hidden sm:inline">Exportar</span>
         </button>
       </div>
     </header>

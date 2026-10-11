@@ -1,13 +1,14 @@
 import React from 'react';
 import { StatePoint, UnitSystem } from '../types/psychrometrics';
 import { UnitConvert } from '../utils/psychrolib';
-import { Plus, Trash2, Edit2, Target } from 'lucide-react';
+import { Plus, Trash2, Edit2, Target, Eye, EyeOff } from 'lucide-react';
 
 interface PointsTableProps {
   points: StatePoint[];
   units: UnitSystem;
   onSelectPoint: (id: string) => void;
   onDeletePoint: (id: string) => void;
+  onToggleHidePoint?: (id: string) => void;
   onAddPoint: () => void;
   selectedPointId: string | null;
 }
@@ -17,6 +18,7 @@ export const PointsTable: React.FC<PointsTableProps> = ({
   units,
   onSelectPoint,
   onDeletePoint,
+  onToggleHidePoint,
   onAddPoint,
   selectedPointId,
 }) => {
@@ -112,6 +114,20 @@ export const PointsTable: React.FC<PointsTableProps> = ({
                   <td className="py-3 px-3 text-right text-[#94a3b8]">{pt.massFlow.toFixed(2)}</td>
                   <td className="py-3 px-4 text-center">
                     <div className="flex items-center justify-center gap-2">
+                      {onToggleHidePoint && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onToggleHidePoint(pt.id);
+                          }}
+                          className={`p-1 transition-colors ${
+                            pt.hidden ? 'text-amber-400 hover:text-amber-300' : 'text-slate-400 hover:text-cyan-300'
+                          }`}
+                          title={pt.hidden ? 'Mostrar en gráfico (oculto)' : 'Ocultar en gráfico'}
+                        >
+                          {pt.hidden ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        </button>
+                      )}
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
