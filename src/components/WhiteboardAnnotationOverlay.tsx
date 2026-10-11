@@ -6,8 +6,6 @@ import {
   Eraser,
   Undo2,
   Trash2,
-  Maximize,
-  Minimize,
   MousePointer,
   Minus,
   MoveRight,
@@ -40,6 +38,14 @@ export interface WhiteboardAnnotationOverlayProps {
   onClose?: () => void;
   isFullscreen?: boolean;
   onToggleFullscreen?: () => void;
+  onZoomIn?: () => void;
+  onZoomOut?: () => void;
+  onZoom100?: () => void;
+  currentZoom?: number;
+  onCenterDiagram?: () => void;
+  onResetBounds?: () => void;
+  isPanZoomLocked?: boolean;
+  onTogglePanZoomLocked?: () => void;
 }
 
 export const WhiteboardAnnotationOverlay: React.FC<WhiteboardAnnotationOverlayProps> = ({
@@ -669,27 +675,6 @@ export const WhiteboardAnnotationOverlay: React.FC<WhiteboardAnnotationOverlayPr
               <ArrowUpDown className="w-4 h-4" />
             </button>
 
-            {/* Fused PDI Fullscreen Button */}
-            <button
-              type="button"
-              onClick={onToggleFullscreen || toggleFullscreen}
-              className={`p-2 rounded-xl transition-all cursor-pointer ${
-                (isFullscreenProp !== undefined ? isFullscreenProp : isFullscreen)
-                  ? 'bg-[#fbbf24] text-black font-bold shadow-[0_0_12px_rgba(251,191,36,0.4)]'
-                  : 'text-slate-300 hover:text-white hover:bg-white/10'
-              }`}
-              title={
-                (isFullscreenProp !== undefined ? isFullscreenProp : isFullscreen)
-                  ? 'Salir de Pantalla Completa PDI (Esc)'
-                  : 'Modo Pantalla Completa PDI (Ocupar toda la pantalla sin navegador)'
-              }
-            >
-              {(isFullscreenProp !== undefined ? isFullscreenProp : isFullscreen) ? (
-                <Minimize className="w-4 h-4" />
-              ) : (
-                <Maximize className="w-4 h-4" />
-              )}
-            </button>
 
             {/* Close whiteboard button */}
             {onClose && (

@@ -143,6 +143,9 @@ interface PsychrometricChartProps {
   overlayConditions?: OperatingCondition[];
   projectorHighContrast?: boolean;
   showWhiteboardByDefault?: boolean;
+  isMaximized?: boolean;
+  onTogglePdiFullscreen?: () => void;
+  onExitPdiFullscreen?: () => void;
 }
 
 // Geometric helpers for anti-collision label layout
@@ -265,6 +268,9 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
   overlayConditions = [],
   projectorHighContrast = false,
   showWhiteboardByDefault = false,
+  isMaximized: propIsMaximized,
+  onTogglePdiFullscreen: propOnTogglePdiFullscreen,
+  onExitPdiFullscreen: propOnExitPdiFullscreen,
 }) => {
   const chartContainerRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -385,37 +391,69 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
   const [showLayersWindow, setShowLayersWindow] = useState<boolean>(false);
 
   // Fullscreen / Maximized diagram mode occupying entire screen (Modo Pantalla Completa PDI)
-  const [isMaximized, setIsMaximized] = useState<boolean>(false);
+  const [localIsMaximized, setLocalIsMaximized] = useState<boolean>(false);
+  const isMaximized = propIsMaximized !== undefined ? propIsMaximized : localIsMaximized;
+  const setIsMaximized = useCallback((val: boolean | ((prev: boolean) => boolean)) => {
+    setLocalIsMaximized(val);
+  }, []);
+
+  // 3-in-1 Unified Exit Handler for "Salir PDI (Esc)"
+  // Función 1: Salir de pantalla completa nativa del navegador (document.exitFullscreen)
+  // Función 2: Contraer el diagrama a su tamaño estándar (setIsMaximized(false) / propOnExitPdiFullscreen)
+  // Función 3: Cerrar las herramientas de pizarra interactiva (setShowWhiteboard(false))
+  const handleExitPdi = useCallback(async () => {
+    // 1. Salir de pantalla completa nativa
+    try {
+      if (document.fullscreenElement && document.exitFullscreen) {
+        await document.exitFullscreen().catch(() => {});
+      }
+    } catch {
+      // Ignorar fallo si ya no está en fullscreen
+    }
+
+    // 2. Contraer diagrama y restaurar tamaño normal
+    setLocalIsMaximized(false);
+    if (propOnExitPdiFullscreen) {
+      propOnExitPdiFullscreen();
+    }
+
+    // 3. Cerrar herramientas de pizarra PDI
+    setShowWhiteboard(false);
+  }, [propOnExitPdiFullscreen]);
 
   // Unified Fullscreen PDI Handler for Psychrometric Chart
   const handleTogglePdiFullscreen = useCallback(async () => {
+    if (propOnTogglePdiFullscreen) {
+      propOnTogglePdiFullscreen();
+      return;
+    }
     try {
       if (!isMaximized) {
-        setIsMaximized(true);
+        setLocalIsMaximized(true);
         if (chartContainerRef.current && !document.fullscreenElement && chartContainerRef.current.requestFullscreen) {
           await chartContainerRef.current.requestFullscreen().catch(() => {});
         }
       } else {
-        setIsMaximized(false);
-        if (document.fullscreenElement && document.exitFullscreen) {
-          await document.exitFullscreen().catch(() => {});
-        }
+        handleExitPdi();
       }
     } catch {
-      // Fallback is purely isMaximized state
+      // Fallback is purely local state
     }
-  }, [isMaximized]);
+  }, [isMaximized, propOnTogglePdiFullscreen, handleExitPdi]);
 
   // Sync isMaximized state with native browser fullscreen changes
   useEffect(() => {
     const handleFullscreenChange = () => {
       if (!document.fullscreenElement && isMaximized) {
-        setIsMaximized(false);
+        setLocalIsMaximized(false);
+        if (propOnExitPdiFullscreen) {
+          propOnExitPdiFullscreen();
+        }
       }
     };
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
-  }, [isMaximized]);
+  }, [isMaximized, propOnExitPdiFullscreen]);
 
   // Manual Zoom input state & double-click 100% reset
   const [isEditingZoom, setIsEditingZoom] = useState<boolean>(false);
@@ -441,10 +479,10 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // 1. Escape key handling (minimize or deselect point)
+      // 1. Escape key handling (Salir PDI con 3 funciones simultáneas o deseleccionar punto)
       if (e.key === 'Escape') {
-        if (isMaximized) {
-          handleTogglePdiFullscreen();
+        if (isMaximized || showWhiteboard) {
+          handleExitPdi();
           return;
         }
         if (selectedPointId) {
@@ -520,7 +558,8 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [
     isMaximized,
-    handleTogglePdiFullscreen,
+    showWhiteboard,
+    handleExitPdi,
     selectedPointId,
     points,
     chartType,
@@ -1952,25 +1991,14 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
     <div
       ref={chartContainerRef}
       className={`relative w-full h-full flex flex-col select-none overflow-hidden rounded-xl border transition-all ${
-        isMaximized ? 'fixed inset-0 z-50 w-screen h-screen rounded-none border-0' : ''
+        isMaximized && !teachingMode ? 'fixed inset-0 z-50 w-screen h-screen rounded-none border-0' : ''
       }`}
       style={{
         backgroundColor: themeStyles.canvasBg,
         borderColor: themeStyles.frameStroke,
       }}
     >
-      {/* Floating Exit Maximize Button when diagram is maximized in PDI Fullscreen */}
-      {isMaximized && (
-        <button
-          type="button"
-          onClick={handleTogglePdiFullscreen}
-          className="absolute top-2.5 right-3 z-50 bg-black/85 hover:bg-amber-400 hover:text-black text-amber-300 px-3.5 py-1.5 rounded-lg border border-amber-400/50 shadow-2xl flex items-center gap-2 text-xs font-bold transition-all cursor-pointer select-none"
-          title="Salir de Pantalla Completa PDI (Esc)"
-        >
-          <Minimize2 className="w-4 h-4" />
-          <span>Salir PDI (Esc)</span>
-        </button>
-      )}
+
 
       {/* Top Floating Glassmorphism Controls Toolbar */}
       <div className="absolute top-2 left-3 z-50 flex flex-wrap items-center gap-1.5 bg-[#0a0a0c]/90 backdrop-blur-md px-3 py-1.5 rounded-xl border border-[rgba(255,255,255,0.15)] text-xs shadow-2xl">
@@ -2236,18 +2264,24 @@ export const PsychrometricChart: React.FC<PsychrometricChartProps> = ({
           </button>
         )}
 
-        {/* Maximize / Contract Diagram to Full Screen (Ocupar toda la pantalla de la aplicación) */}
+        {/* Modo Pantalla Completa PDI (Unificado con Pizarra y PDI) */}
         <button
-          onClick={() => setIsMaximized((prev) => !prev)}
+          onClick={isMaximized ? handleExitPdi : handleTogglePdiFullscreen}
           className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded text-xs font-semibold transition-all cursor-pointer ${
             isMaximized
               ? 'bg-amber-400 text-black shadow font-extrabold ring-1 ring-amber-300'
               : 'text-amber-300 bg-amber-950/40 border border-amber-800/40 hover:bg-amber-900/50 hover:text-white'
           }`}
-          title={isMaximized ? "Contraer diagrama (Restaurar tamaño estándar)" : "Maximizar diagrama (Ocupar toda la pantalla de la aplicación)"}
+          title={
+            isMaximized
+              ? 'Salir de Pantalla Completa PDI (Esc) · 1. Sale de pantalla completa · 2. Restaura el diagrama · 3. Cierra la pizarra'
+              : 'Modo Pantalla Completa PDI · Maximiza el diagrama a pantalla completa para clase didáctica'
+          }
         >
           {isMaximized ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5 text-amber-400" />}
-          <span className={isSplitView ? 'hidden sm:inline' : 'inline'}>{isMaximized ? 'Contraer' : 'Maximizar Pantalla'}</span>
+          <span className={isSplitView ? 'hidden sm:inline' : 'inline'}>
+            {isMaximized ? 'Salir PDI' : 'Pantalla Completa PDI'}
+          </span>
         </button>
 
         {/* Toggle Floating Point Window in Main Chart */}

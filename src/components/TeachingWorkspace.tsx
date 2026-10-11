@@ -37,7 +37,6 @@ import {
   ChevronLeft,
   PanelRightClose,
   PanelRightOpen,
-  Layers,
   HelpCircle,
   CheckCircle2,
   AlertTriangle,
@@ -45,8 +44,6 @@ import {
   Snowflake,
   Droplets,
   Wind,
-  Maximize2,
-  Minimize2,
   Compass,
   SunMedium,
   ArrowRight,
@@ -237,11 +234,41 @@ export const TeachingWorkspace: React.FC<TeachingWorkspaceProps> = ({
   const [guidePointTdb, setGuidePointTdb] = useState<number>(25);
   const [guidePointRh, setGuidePointRh] = useState<number>(50);
 
-  // Interactive Panel Collapsed State (Collapsed by default as requested)
-  const [isInteractivePanelCollapsed, setIsInteractivePanelCollapsed] = useState<boolean>(true);
+  // Interactive Panel Collapsed State (Visible by default in PDI view as requested)
+  const [isInteractivePanelCollapsed, setIsInteractivePanelCollapsed] = useState<boolean>(false);
 
-  // Diagram Maximized State (Occupying entire application screen)
+  // Diagram Maximized State (Occupying entire application screen in PDI mode)
   const [isDiagramMaximized, setIsDiagramMaximized] = useState<boolean>(false);
+  const workspaceContainerRef = useRef<HTMLDivElement>(null);
+
+  // Exit PDI Fullscreen: closes fullscreen and restores standard diagram layout
+  const handleExitPdiFullscreen = useCallback(async () => {
+    setIsDiagramMaximized(false);
+    try {
+      if (document.fullscreenElement && document.exitFullscreen) {
+        await document.exitFullscreen().catch(() => {});
+      }
+    } catch {
+      // Ignorar si no está en fullscreen
+    }
+  }, []);
+
+  // Toggle PDI Fullscreen: maximizes diagram stage, keeps interactive panel visible, and requests native fullscreen
+  const handleTogglePdiFullscreen = useCallback(async () => {
+    try {
+      if (!isDiagramMaximized) {
+        setIsDiagramMaximized(true);
+        setIsInteractivePanelCollapsed(false); // Siempre visible en vista PDI
+        if (workspaceContainerRef.current && !document.fullscreenElement && workspaceContainerRef.current.requestFullscreen) {
+          await workspaceContainerRef.current.requestFullscreen().catch(() => {});
+        }
+      } else {
+        await handleExitPdiFullscreen();
+      }
+    } catch {
+      setIsDiagramMaximized((prev) => !prev);
+    }
+  }, [isDiagramMaximized, handleExitPdiFullscreen]);
 
   // Floating Layers Window State (Accessible when maximized or normal)
   const [showLayersWindow, setShowLayersWindow] = useState<boolean>(false);
@@ -269,12 +296,12 @@ export const TeachingWorkspace: React.FC<TeachingWorkspaceProps> = ({
   React.useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && isDiagramMaximized) {
-        setIsDiagramMaximized(false);
+        handleExitPdiFullscreen();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isDiagramMaximized]);
+  }, [isDiagramMaximized, handleExitPdiFullscreen]);
 
   // Lesson 2: Air Mixture interactive parameters
   // Stream A: Outdoor Air (Exterior)
@@ -932,7 +959,7 @@ export const TeachingWorkspace: React.FC<TeachingWorkspaceProps> = ({
   ];
 
   return (
-    <div className="flex flex-col h-full w-full bg-[#0a0a0c] text-slate-100 overflow-hidden font-primary select-none">
+    <div ref={workspaceContainerRef} className="flex flex-col h-full w-full bg-[#0a0a0c] text-slate-100 overflow-hidden font-primary select-none">
       {/* 1. Header Toolbar for Professor */}
       <div className="h-14 bg-[#141416] border-b border-white/10 px-3 sm:px-4 flex items-center justify-between shrink-0 gap-2">
         {/* Left: Mode Title & Lesson Selector */}
@@ -1112,20 +1139,6 @@ export const TeachingWorkspace: React.FC<TeachingWorkspaceProps> = ({
             </span>
           </button>
 
-          {/* Toggle Floating Layers Window (Ventana de Capas del Diagrama) */}
-          <button
-            onClick={() => setShowLayersWindow((prev) => !prev)}
-            className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all cursor-pointer flex items-center gap-1.5 ${
-              showLayersWindow
-                ? 'bg-amber-400 text-black border-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.35)] font-extrabold'
-                : 'bg-black/30 border-white/10 text-slate-300 hover:text-white hover:border-amber-400/40'
-            }`}
-            title="Abrir ventana flotante de capas del diagrama (Líneas, Escalas, Confort)"
-          >
-            <Layers className={`w-3.5 h-3.5 ${showLayersWindow ? 'text-black' : 'text-amber-400'}`} />
-            <span className="hidden sm:inline">Capas</span>
-          </button>
-
           {/* Toggle Interactive Class Panel (Solapsable / Colapsable) */}
           <button
             onClick={() => setIsInteractivePanelCollapsed((prev) => !prev)}
@@ -1145,20 +1158,6 @@ export const TeachingWorkspace: React.FC<TeachingWorkspaceProps> = ({
             <span className="text-[10px] font-mono opacity-80">
               {isInteractivePanelCollapsed ? '(Colapsado)' : ''}
             </span>
-          </button>
-
-          {/* Maximize / Contract Diagram to Full Screen (Ocupar toda la pantalla de la aplicación) */}
-          <button
-            onClick={() => setIsDiagramMaximized((prev) => !prev)}
-            className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all cursor-pointer flex items-center gap-1.5 ${
-              isDiagramMaximized
-                ? 'bg-amber-400 text-black border-amber-400 shadow-[0_0_14px_rgba(251,191,36,0.4)] font-extrabold'
-                : 'bg-black/30 border-white/10 text-slate-300 hover:text-white hover:border-amber-400/40'
-            }`}
-            title={isDiagramMaximized ? 'Contraer diagrama (Restaurar tamaño estándar)' : 'Maximizar diagrama (Ocupar toda la pantalla de la aplicación)'}
-          >
-            {isDiagramMaximized ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5 text-amber-400" />}
-            <span className="hidden sm:inline">{isDiagramMaximized ? 'Contraer Diagrama' : 'Maximizar Diagrama'}</span>
           </button>
 
           {/* Classroom Projector Mode */}
@@ -1205,19 +1204,6 @@ export const TeachingWorkspace: React.FC<TeachingWorkspaceProps> = ({
           ref={chartStageRef}
           className="flex-1 h-full relative overflow-hidden flex flex-col bg-[#0a0a0c] transition-all"
         >
-          {/* Floating Exit Maximize Button when diagram is maximized */}
-          {isDiagramMaximized && (
-            <button
-              type="button"
-              onClick={() => setIsDiagramMaximized(false)}
-              className="absolute top-3 right-4 z-40 bg-black/85 hover:bg-amber-400 hover:text-black text-amber-300 px-3.5 py-1.5 rounded-lg border border-amber-400/50 shadow-2xl flex items-center gap-2 text-xs font-bold transition-all cursor-pointer select-none"
-              title="Contraer diagrama a vista normal (Esc)"
-            >
-              <Minimize2 className="w-4 h-4" />
-              <span>Contraer Diagrama</span>
-            </button>
-          )}
-
           {/* Floating Layers Window (Accessible when maximized or normal) */}
           {showLayersWindow && (
             <FloatingLayersWindow
@@ -1264,6 +1250,9 @@ export const TeachingWorkspace: React.FC<TeachingWorkspaceProps> = ({
             teachingMixtureInfo={teachingMixtureInfo}
             projectorHighContrast={isClassroomProjectorMode}
             showWhiteboardByDefault={true}
+            isMaximized={isDiagramMaximized}
+            onTogglePdiFullscreen={handleTogglePdiFullscreen}
+            onExitPdiFullscreen={handleExitPdiFullscreen}
           />
 
           {/* Floating Expand Tab for Collapsible Interactive Panel (When collapsed) */}
